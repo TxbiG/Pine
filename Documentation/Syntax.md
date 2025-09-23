@@ -21,13 +21,26 @@ int
 bool
 float
 double
-enum
 void
 ```
+
+enum
+struct
+union
 
 ```
 if
 switch
 else
 elif
+```
+
+```
+#include
+#define
+#ifndef
+#if
+#else
+#endif
+#undef
 ```
