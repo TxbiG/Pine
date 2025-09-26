@@ -65,5 +65,5 @@ attributes
 [[aligned()]]
 [[packed()]]
 [[deprecated()]]
-[[[[assume(expression)]]
+[[assume(expression)]]
 ```
