@@ -14,7 +14,7 @@ i16
 i32
 i64
 ```
-
+## Variants
 ```
 char
 int
@@ -23,18 +23,21 @@ float
 double
 void
 ```
-
+## Data types
+```
 enum
 struct
 union
-
+class
+```
+## IF Statements
 ```
 if
 switch
 else
 elif
 ```
-
+## Macros
 ```
 #include
 #define
@@ -43,4 +46,8 @@ elif
 #else
 #endif
 #undef
+```
+
+attributes
+```
 ```
