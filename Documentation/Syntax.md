@@ -54,4 +54,14 @@ elif
 
 attributes
 ```
+[[noreturn]]
+[[nodiscard]]
+[[unused]]
+[fallthrough]]
+[[likely]]
+[[no_unique_address]]
+[[transparent_union]]
+[[aligned()]]
+[[packed()]]
+[[deprecated()]
 ```
