@@ -59,9 +59,11 @@ attributes
 [[unused]]
 [fallthrough]]
 [[likely]]
+[[unlikely]]
 [[no_unique_address]]
 [[transparent_union]]
 [[aligned()]]
 [[packed()]]
-[[deprecated()]
+[[deprecated()]]
+[[[[assume(expression)]]
 ```
