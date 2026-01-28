@@ -21,6 +21,7 @@ i256
 ## Variants
 ```
 char
+string
 int
 bool
 float
@@ -34,12 +35,13 @@ struct
 union
 class
 ```
-## IF Statements
+## If Statements
 ```
 if
 switch
 else
 elif
+while
 ```
 ## Macros
 ```
@@ -51,8 +53,7 @@ elif
 #endif
 #undef
 ```
-
-attributes
+## attributes
 ```
 [[noreturn]]
 [[nodiscard]]
@@ -66,4 +67,13 @@ attributes
 [[packed()]]
 [[deprecated()]]
 [[assume(expression)]]
+```
+
+## Inline assembler
+```
+__asm__
+```
+## Modifier
+```
+__volatile__
 ```
