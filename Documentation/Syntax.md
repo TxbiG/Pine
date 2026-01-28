@@ -31,8 +31,8 @@ void
 ## Data types
 ```
 enum
-struct
 union
+struct
 class
 ```
 ## If Statements
