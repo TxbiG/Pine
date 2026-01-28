@@ -58,7 +58,7 @@ while
 [[noreturn]]
 [[nodiscard]]
 [[unused]]
-[fallthrough]]
+[[fallthrough]]
 [[likely]]
 [[unlikely]]
 [[no_unique_address]]
