@@ -14,6 +14,7 @@ typedef enum {
     TOKEN_IF,
     TOKEN_ELSE,
     TOKEN_WHILE,
+    TOKEN_SWITCH,
     TOKEN_RETURN,
     TOKEN_INT,
 
