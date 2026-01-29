@@ -17,6 +17,10 @@ typedef enum {
 // Forward declaration
 typedef struct ASTNode ASTNode;
 
+typedef struct {
+    char *name;
+} Attribute;
+
 // ===== AST Node Struct =====
 struct ASTNode {
     ASTNodeType type;
@@ -49,6 +53,8 @@ struct ASTNode {
             ASTNode *value;
         } ret;
     };
+    Attribute *attrs;
+    size_t attr_count;
 };
 
 // ===== AST API =====
