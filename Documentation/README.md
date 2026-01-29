@@ -4,7 +4,7 @@
 - [What is Pine](#)
 - [Supported Architectures](#)
 - [Installing](#)
-- [Licensing](#)
+- [Licensing](/LICENSE)
 
 ## Language Basics
 - [Hello World](#)
@@ -16,7 +16,7 @@
 - [Comments](#)
 
 ## Advanced Language Features
-- [Structs and Enums](#)
+- [Enum, Classes and Structs](#)
 - [Pattern Matching](#)
 - [Memory Management](#)
 - [Error Handling](#)
@@ -27,18 +27,17 @@
 ## Compiler Usage
 - [Basic Compilation](#)
 - [Compiler Flags and Options](#)
-- [Optimization Levels](#)
+- [Optimisation Levels](#)
 - [Cross-Compilation](#)
 - [Build Scripts](#)
 
 ## Standard Library
 - [IO](#)
 - [Math](#)
-- [Collections](#)
-- [Strings](#)
+- [Time](#)
 - [System / OS Interaction](#)
 
 ## Interoperability
-- [C / FFI Bindings](#)
+- [C/C++ / FFI Bindings](#)
 - [Calling Pine from Other Languages](#)
 - [WebAssembly (soon)](#)
