@@ -35,6 +35,7 @@ typedef enum {
     TOKEN_STRUCT,
     TOKEN_UNION,
     TOKEN_CLASS,
+    TOKEN_TYPEDEF,
 
     // Keywords
     TOKEN_IF,
