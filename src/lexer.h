@@ -10,6 +10,32 @@ typedef enum {
     TOKEN_NUMBER,
     TOKEN_STRING,
 
+    TOKEN_U8,
+    TOKEN_U16,
+    TOKEN_U32,
+    TOKEN_U64,
+    TOKEN_U128,
+    TOKEN_U256,
+    
+    TOKEN_I8,
+    TOKEN_I16,
+    TOKEN_I32,
+    TOKEN_I64,
+    TOKEN_I128,
+    TOKEN_I256,
+
+    TOKEN_BOOL,
+    TOKEN_CHAR,
+    TOKEN_STRING_TYPE,
+    TOKEN_FLOAT,
+    TOKEN_DOUBLE,
+    TOKEN_VOID,
+
+    TOKEN_ENUM,
+    TOKEN_STRUCT,
+    TOKEN_UNION,
+    TOKEN_CLASS,
+
     // Keywords
     TOKEN_IF,
     TOKEN_ELSE,
