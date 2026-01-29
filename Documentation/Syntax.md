@@ -47,6 +47,7 @@ while
 ```
 #import
 #define
+#defined(expression)
 #ifndef
 #if
 #else
