@@ -56,7 +56,11 @@ typedef enum {
     TOKEN_RPAREN,  // )
     TOKEN_LBRACE,  // {
     TOKEN_RBRACE,  // }
-    TOKEN_SEMI     // ;
+    TOKEN_SEMI,    // ;
+
+    TOKEN_ASM,
+    TOKEN_VOLATILE,
+    TOKEN_ATTRIBUTE
 } TokenType;
 
 // ===== Token Struct =====
