@@ -30,6 +30,45 @@ typedef struct {
 
 const char *keywords[] = { "mov","load","store","if","else","while","return","int","ptr", NULL };
 
+typedef struct {
+    const char *name;
+    TokenType type;
+} Keyword;
+
+static Keyword keywords[] = {
+    {"u8", TOKEN_U8},
+    {"u16", TOKEN_U16},
+    {"u32", TOKEN_U32},
+    {"u64", TOKEN_U64},
+    {"u128", TOKEN_U128},
+    {"u256", TOKEN_U256},
+
+    {"i8", TOKEN_I8},
+    {"i16", TOKEN_I16},
+    {"i32", TOKEN_I32},
+    {"i64", TOKEN_I64},
+    {"i128", TOKEN_I128},
+    {"i256", TOKEN_I256},
+
+    {"bool", TOKEN_BOOL},
+    {"char", TOKEN_CHAR},
+    {"string", TOKEN_STRING_TYPE},
+    {"float", TOKEN_FLOAT},
+    {"double", TOKEN_DOUBLE},
+    {"void", TOKEN_VOID},
+
+    {"enum", TOKEN_ENUM},
+    {"struct", TOKEN_STRUCT},
+    {"union", TOKEN_UNION},
+    {"class", TOKEN_CLASS},
+
+    {"if", TOKEN_IF},
+    {"else", TOKEN_ELSE},
+    {"elif", TOKEN_ELIF},
+    {"while", TOKEN_WHILE},
+    {"switch", TOKEN_SWITCH},
+};
+
 int is_keyword(const char *s){
     for(int k=0; keywords[k]; ++k)
         if(strcmp(s, keywords[k])==0) return 1;
