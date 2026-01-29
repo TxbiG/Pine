@@ -45,7 +45,7 @@ while
 ```
 ## Macros
 ```
-#include
+#import
 #define
 #ifndef
 #if
