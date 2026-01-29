@@ -58,6 +58,9 @@ typedef enum {
     TOKEN_RBRACE,  // }
     TOKEN_SEMI,    // ;
 
+    TOKEN_LDBRACKET, // [[
+    TOKEN_RDBRACKET  // ]]
+
     TOKEN_ASM,
     TOKEN_VOLATILE,
     TOKEN_ATTRIBUTE
