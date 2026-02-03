@@ -62,9 +62,9 @@ typedef enum {
     TOKEN_LDBRACKET, // [[
     TOKEN_RDBRACKET  // ]]
 
-    TOKEN_ASM,
-    TOKEN_VOLATILE,
-    TOKEN_ATTRIBUTE
+    TOKEN_ASM,       // __asm__
+    TOKEN_VOLATILE,  // __volatile__
+    TOKEN_ATTRIBUTE  // __attribute__
 } TokenType;
 
 // ===== Token Struct =====
