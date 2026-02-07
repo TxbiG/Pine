@@ -44,12 +44,7 @@
 - [Calling Pine from Other Languages](#)
 - [WebAssembly (soon)](#)
 
-
-
-
-
-
-
+---
 
 # What is Pine
 # Supported Architectures
