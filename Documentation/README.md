@@ -33,9 +33,10 @@
 - [Build Scripts](#)
 
 ## Standard Library
-- [IO](#)
-- [Math](#)
-- [Time](#)
+- [IO](/lib/stdio.h)
+- [Math](/lib/math.h)
+- [Time](/lib/time.h)
+- [Standard](/lib/stdlib.h)
 - [System / OS Interaction](#)
 
 ## Interoperability
