@@ -1,9 +1,9 @@
 # Pine Compiler Documentation
 
 ## Overview
-- [What is Pine](##what-is-pine)
-- [Supported Architectures](##supported-architectures)
-- [Memory Safety](##memory-safety)
+- [What is Pine](#what-is-pine)
+- [Supported Architectures](#supported-architectures)
+- [Memory Safety](#memory-safety)
 - [Installing](##installing)
 - [Licensing](/LICENSE)
 
