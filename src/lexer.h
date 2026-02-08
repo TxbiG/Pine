@@ -31,6 +31,10 @@ typedef enum {
     TOKEN_DOUBLE,
     TOKEN_VOID,
 
+    TOKEN_STATIC,
+    TOKEN_CONST,
+    TOKEN_INLINE,
+
     TOKEN_ENUM,
     TOKEN_STRUCT,
     TOKEN_UNION,
