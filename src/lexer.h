@@ -37,6 +37,14 @@ typedef enum {
     TOKEN_CLASS,
     TOKEN_TYPEDEF,
 
+    TOKEN_PRAGMA,
+
+    TOKEN_MACRO_DEFINE,
+    TOKEN_MACRO_DEFINED,
+    TOKEN_MACRO_IF,
+    TOKEN_MACRO_ELSE,
+    TOKEN_MACRO_ENDIF,
+
     // Keywords
     TOKEN_IF,
     TOKEN_ELSE,
