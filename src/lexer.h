@@ -10,52 +10,54 @@ typedef enum {
     TOKEN_NUMBER,
     TOKEN_STRING,
 
-    TOKEN_U8,
-    TOKEN_U16,
-    TOKEN_U32,
-    TOKEN_U64,
-    TOKEN_U128,
-    TOKEN_U256,
+    TOKEN_U8,          // uint8_t
+    TOKEN_U16,         // uint16_t
+    TOKEN_U32,         // uint32_t
+    TOKEN_U64,         // uint64_t
+    TOKEN_U128,        // uint128_t
+    TOKEN_U256,        // uint256_t
     
-    TOKEN_I8,
-    TOKEN_I16,
-    TOKEN_I32,
-    TOKEN_I64,
-    TOKEN_I128,
-    TOKEN_I256,
+    TOKEN_I8,          // int8_t
+    TOKEN_I16,         // int16_t
+    TOKEN_I32,         // int32_t
+    TOKEN_I64,         // int64_t
+    TOKEN_I128,        // int128_t
+    TOKEN_I256,        // int256_t
 
-    TOKEN_BOOL,
-    TOKEN_CHAR,
-    TOKEN_STRING_TYPE,
-    TOKEN_FLOAT,
-    TOKEN_DOUBLE,
-    TOKEN_VOID,
+    TOKEN_BOOL,        // bool
+    TOKEN_CHAR,        // char
+    TOKEN_STRING_TYPE, // string
+    TOKEN_FLOAT,       // float
+    TOKEN_DOUBLE,      // double
+    TOKEN_VOID,        // void
 
-    TOKEN_STATIC,
-    TOKEN_CONST,
-    TOKEN_INLINE,
+    TOKEN_STATIC,      // static
+    TOKEN_CONST,       // const
+    TOKEN_INLINE,      // inline
 
-    TOKEN_ENUM,
-    TOKEN_STRUCT,
-    TOKEN_UNION,
-    TOKEN_CLASS,
-    TOKEN_TYPEDEF,
+    TOKEN_ENUM,        // enum
+    TOKEN_STRUCT,      // struct
+    TOKEN_UNION,       // union
+    TOKEN_CLASS,       // class
+    TOKEN_TYPEDEF,     // typedef
 
-    TOKEN_PRAGMA,
+    TOKEN_PRAGMA,    // #pragma
+    TOKEN_IMPORT,    // #import
 
-    TOKEN_MACRO_DEFINE,
-    TOKEN_MACRO_DEFINED,
-    TOKEN_MACRO_IF,
-    TOKEN_MACRO_ELSE,
-    TOKEN_MACRO_ENDIF,
+    TOKEN_MACRO_DEFINE,    // #define
+    TOKEN_MACRO_DEFINED,   // defined(expression)
+    TOKEN_MACRO_IF,        // #if
+    TOKEN_MACRO_ELSE,      // #else
+    TOKEN_MACRO_ELIF,      // #elif
+    TOKEN_MACRO_ENDIF,     // #endif
 
     // Keywords
-    TOKEN_IF,
-    TOKEN_ELSE,
-    TOKEN_WHILE,
-    TOKEN_SWITCH,
-    TOKEN_RETURN,
-    TOKEN_INT,
+    TOKEN_IF,                // if (expression)
+    TOKEN_ELSE,              // else
+    TOKEN_WHILE,             // while(expression)
+    TOKEN_SWITCH,            // switch(expression)
+    TOKEN_RETURN,            // return
+    TOKEN_INT,               // 
 
     // Operators / punctuation
     TOKEN_PLUS,    // +
