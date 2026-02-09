@@ -1,5 +1,5 @@
 # Pine [Development]
-Pine is a low level programming language
+Pine is a low-level programming language. Similar to C/C++ style like
 
 
 ## Folder structure
