@@ -37,11 +37,11 @@ class
 ```
 ## If Statements
 ```
-if
-switch
+if(expression)
 else
-elif
-while
+elif(expression)
+while(expression)
+switch(expression)
 ```
 ## Macros
 ```
