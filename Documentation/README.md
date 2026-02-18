@@ -4,7 +4,7 @@
 - [What is Pine](#what-is-pine)
 - [Supported Architectures](#supported-architectures)
 - [Memory Safety](#memory-safety)
-- [Installing](##installing)
+- [Installing](#installing)
 - [Licensing](/LICENSE)
 
 ## Language Basics
