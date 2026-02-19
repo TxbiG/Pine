@@ -13,7 +13,6 @@ The project is distributed under the [Apache-2.0 License](LICENSE).
 
 
 ## Resources
-- https://buildyourownlisp.com/contents
 - https://github.com/lotabout/write-a-C-interpreter
 - https://github.com/lotabout/Let-s-build-a-compiler
 - https://github.com/DoctorWkt/acwj
