@@ -1,0 +1,12 @@
+#pragma once
+
+struct Pair {
+    i32 left;
+    i64 right;
+}
+
+i32 main() {
+    i32 values[4];
+    i32 total = values[0];
+    return total;
+}

@@ -3,95 +3,121 @@
 
 #include <stddef.h>
 
-// ===== Token Types =====
 typedef enum {
     TOKEN_EOF,
+    TOKEN_ERROR,
     TOKEN_IDENT,
     TOKEN_NUMBER,
+    TOKEN_CHAR_LITERAL,
     TOKEN_STRING,
+    TOKEN_NULL,
 
-    TOKEN_U8,          // uint8_t
-    TOKEN_U16,         // uint16_t
-    TOKEN_U32,         // uint32_t
-    TOKEN_U64,         // uint64_t
-    TOKEN_U128,        // uint128_t
-    TOKEN_U256,        // uint256_t
-    
-    TOKEN_I8,          // int8_t
-    TOKEN_I16,         // int16_t
-    TOKEN_I32,         // int32_t
-    TOKEN_I64,         // int64_t
-    TOKEN_I128,        // int128_t
-    TOKEN_I256,        // int256_t
+    TOKEN_U8,
+    TOKEN_U16,
+    TOKEN_U32,
+    TOKEN_U64,
+    // Reserved for future wide-integer support. Not yet consumed by
+    // the parser's type-name switch.
+    TOKEN_U128,
+    TOKEN_U256,
 
-    TOKEN_BOOL,        // bool
-    TOKEN_CHAR,        // char
-    TOKEN_STRING_TYPE, // string
-    TOKEN_FLOAT,       // float
-    TOKEN_DOUBLE,      // double
-    TOKEN_VOID,        // void
+    TOKEN_I8,
+    TOKEN_I16,
+    TOKEN_I32,
+    TOKEN_I64,
+    // Reserved for future wide-integer support. Not yet consumed by
+    // the parser's type-name switch.
+    TOKEN_I128,
+    TOKEN_I256,
 
-    TOKEN_STATIC,      // static
-    TOKEN_CONST,       // const
-    TOKEN_INLINE,      // inline
+    TOKEN_BOOL,
+    TOKEN_CHAR,
+    TOKEN_STRING_TYPE,
+    TOKEN_FLOAT,
+    TOKEN_DOUBLE,
+    TOKEN_VOID,
 
-    TOKEN_ENUM,        // enum
-    TOKEN_STRUCT,      // struct
-    TOKEN_UNION,       // union
-    TOKEN_CLASS,       // class
-    TOKEN_TYPEDEF,     // typedef
+    TOKEN_CONST,
+    // Reserved for future storage-class/qualifier support. Not yet
+    // consumed by the parser.
+    TOKEN_STATIC,
+    TOKEN_INLINE,
 
-    TOKEN_PRAGMA,    // #pragma
-    TOKEN_IMPORT,    // #import
+    // Reserved for future data-type work (Phase 4 of the roadmap).
+    // Not yet consumed by the parser.
+    TOKEN_ENUM,
+    TOKEN_STRUCT,
+    TOKEN_CLASS,
+    TOKEN_UNION,
 
-    TOKEN_MACRO_DEFINE,    // #define
-    TOKEN_MACRO_DEFINED,   // defined(expression)
-    TOKEN_MACRO_IF,        // #if
-    TOKEN_MACRO_ELSE,      // #else
-    TOKEN_MACRO_ELIF,      // #elif
-    TOKEN_MACRO_ENDIF,     // #endif
+    TOKEN_IMPORT,
 
-    // Keywords
-    TOKEN_IF,                // if (expression)
-    TOKEN_ELSE,              // else
-    TOKEN_WHILE,             // while(expression)
-    TOKEN_SWITCH,            // switch(expression)
-    TOKEN_RETURN,            // return
-    TOKEN_INT,               // 
+    TOKEN_IF,
+    TOKEN_ELSE,
+    TOKEN_WHILE,
+    TOKEN_FOR,
+    TOKEN_SWITCH,
+    TOKEN_CASE,
+    TOKEN_DEFAULT,
+    TOKEN_RETURN,
+    TOKEN_BREAK,
+    TOKEN_CONTINUE,
+    TOKEN_UNSAFE,
 
-    // Operators / punctuation
-    TOKEN_PLUS,    // +
-    TOKEN_MINUS,   // -
-    TOKEN_STAR,    // *
-    TOKEN_SLASH,   // /
-    TOKEN_ASSIGN,  // =
-    TOKEN_EQ,      // ==
-    TOKEN_NEQ,     // !=
-    TOKEN_LPAREN,  // (
-    TOKEN_RPAREN,  // )
-    TOKEN_LBRACE,  // {
-    TOKEN_RBRACE,  // }
-    TOKEN_SEMI,    // ;
+    TOKEN_PLUS,
+    TOKEN_MINUS,
+    TOKEN_STAR,
+    TOKEN_SLASH,
+    TOKEN_PERCENT,
+    TOKEN_BANG,
+    TOKEN_ASSIGN,
+    TOKEN_EQ,
+    TOKEN_NEQ,
+    TOKEN_LT,
+    TOKEN_LTE,
+    TOKEN_GT,
+    TOKEN_GTE,
+    TOKEN_AND,
+    TOKEN_AND_AND,
+    TOKEN_OR,
+    TOKEN_OR_OR,
+    TOKEN_XOR,
+    TOKEN_TILDE,
+    TOKEN_QUESTION,
+    TOKEN_LSHIFT,
+    TOKEN_RSHIFT,
+    TOKEN_LPAREN,
+    TOKEN_RPAREN,
+    TOKEN_LBRACE,
+    TOKEN_RBRACE,
+    TOKEN_LBRACKET,
+    TOKEN_RBRACKET,
+    TOKEN_DOT,
+    TOKEN_COMMA,
+    TOKEN_SEMI,
+    TOKEN_COLON,
 
-    TOKEN_LDBRACKET, // [[
-    TOKEN_RDBRACKET  // ]]
+    TOKEN_LDBRACKET,
+    TOKEN_RDBRACKET,
 
-    TOKEN_ASM,       // __asm__
-    TOKEN_VOLATILE,  // __volatile__
-    TOKEN_ATTRIBUTE  // __attribute__
+    // Reserved for future inline-assembly support (Phase 5/6 of the
+    // roadmap: "inline assembly requires unsafe"). Not yet consumed
+    // by the parser.
+    TOKEN_ASM,
+    TOKEN_VOLATILE,
+    TOKEN_ATTRIBUTE
 } TokenType;
 
-// ===== Token Struct =====
+// A token points directly into the source buffer; it does not own `lexeme`.
 typedef struct {
     TokenType type;
-    const char *lexeme;  // pointer into source or allocated
+    const char *lexeme;
     size_t length;
-
     int line;
     int column;
 } Token;
 
-// ===== Lexer State =====
+// Lexer state for a single source buffer, including current source position.
 typedef struct {
     const char *src;
     size_t pos;
@@ -99,8 +125,9 @@ typedef struct {
     int column;
 } Lexer;
 
-// ===== API =====
+// Initializes the lexer before the first call to lexer_next_token.
 void lexer_init(Lexer *lexer, const char *source);
+// Returns the next token and advances the lexer.
 Token lexer_next_token(Lexer *lexer);
 
 #endif

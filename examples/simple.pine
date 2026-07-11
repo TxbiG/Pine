@@ -1,1 +1,63 @@
+#pragma once
 
+struct Vec2 {
+    i32 x;
+    i32 y;
+}
+
+/* Global literals exercise char, string, and block comments. */
+const i32 DEFAULT_LIMIT = 4;
+const char MARK = 'P';
+i32 global_bias = 1;
+string GREETING = "pine";
+
+i32 add(i32 a, i32 b) {
+    return a + b;
+}
+
+i32 sum(Vec2 value) {
+    return value.x + value.y;
+}
+
+i32 count_to(i32 limit) {
+    i32 values[4];
+    i32 mask = (limit << 1) | 1;
+    i32 first = 0;
+    i32 total = (mask & 3) + global_bias;
+
+    unsafe {
+        i32* ptr = &values[0];
+        first = *ptr;
+    }
+
+    for (i32 i = 0; i < limit && !(total > 20); i = i + 1) {
+        if (i % 2 == 0) {
+            continue;
+        }
+
+        total = add(total, values[i]);
+
+        if (total > 10 || i > 8) {
+            break;
+        }
+    }
+
+    switch (limit) {
+        case 0:
+            total = total + 1;
+            break;
+        case 4:
+            total = total + 2;
+            break;
+        default:
+            total = total + 3;
+            break;
+    }
+
+    return total + first + ((~mask) ^ (mask >> 1));
+}
+
+i32 main() {
+    Vec2 point;
+    return count_to(DEFAULT_LIMIT) + sum(point);
+}

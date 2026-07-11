@@ -1,0 +1,11 @@
+#pragma once
+
+i32 read_or_zero(i32*? maybe_value) {
+    if (maybe_value != null) {
+        unsafe {
+            return *maybe_value;
+        }
+    }
+
+    return 0;
+}

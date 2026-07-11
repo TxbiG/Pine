@@ -1,0 +1,11 @@
+#pragma once
+
+struct Token {
+    i32 value;
+}
+
+i32 main() {
+    Token token;
+    Token next = move(token);
+    return next.value;
+}

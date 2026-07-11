@@ -1,0 +1,5 @@
+#pragma once
+
+i32 first([]i32 values) {
+    return values[0];
+}

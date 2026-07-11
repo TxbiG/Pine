@@ -1,117 +1,65 @@
-# Pine Compiler Documentation
+# Pine Documentation
 
-## Overview
-- [What is Pine](#what-is-pine)
-- [Supported Architectures](#supported-architectures)
-- [Memory Safety](#memory-safety)
-- [Installing](#installing)
-- [Licensing](/LICENSE)
+This folder documents the current Pine language and compiler direction.
 
-## Language Basics
-- [Hello World](#)
-- [Syntax Overview](#)
-- [Data Types](#)
-- [Variables and Constants](#)
-- [Control Flow](#)
-- [Functions](#)
-- [Comments](#)
+## Recommended Reading Order
 
-## Advanced Language Features
-- [Enum, Classes and Structs](#)
-- [Pattern Matching](#)
-- [Memory Management](#)
-- [Error Handling](#)
-- [Generics](#)
-- [Modules and Imports](#)
-- [Traits / Interfaces](#)
+1. [Design.md](./Design.md) explains Pine's identity and safety model.
+2. [Syntax.md](./Syntax.md) describes the current supported syntax.
+3. [Roadmap.md](./Roadmap.md) tracks completed work and next steps.
+4. [../README_BUILD.md](../README_BUILD.md) explains how to build and run the current compiler.
 
-## Compiler Usage
-- [Basic Compilation](#)
-- [Compiler Flags and Options](#)
-- [Optimisation Levels](#)
-- [Cross-Compilation](#)
-- [Build Scripts](#)
+## What Pine Is Today
 
-## Standard Library
-- [IO](/lib/stdio.h)
-- [Math](/lib/math.h)
-- [Time](/lib/time.h)
-- [Standard](/lib/stdlib.h)
-- [System / OS Interaction](#)
+Pine is currently a C-like systems language implemented as a C transpiler. The compiler can parse a multi-file Pine program, run semantic checks, and emit readable C. It also has a textual IR dump mode for compiler development.
 
-## Interoperability
-- [C/C++ / FFI Bindings](#)
-- [Calling Pine from Other Languages](#)
-- [WebAssembly (soon)](#)
+Current compiler pipeline:
 
----
-
-# What is Pine
-Pine is a modern, statically-typed systems programming language designed for performance, control, and clarity.
-
-Pine combines low-level power with modern language design principles. It is built for developers who want C-level control with a cleaner structure and optional safety features.
-
-Goals:
-- Near C/C++ performance
-- Strong static typing
-- Explicit low-level control
-- Optional memory safety
-- Familiar and readable syntax
-
-# Supported Architectures
-Tier 1 (Fully Supported):
-- x86_64
-- ARM64 (AArch64)
-
-Tier 2 (Planned):
-- RISC-V 64
-- WASM32
-- ARMv7
-
-Planned Backends:
-- Native assembler backend
-- C transpiler backend
-- LLVM backend (future)
-
-# Memory Safety
-Pine provides configurable memory safety modes.
-
-Manual Mode (C-style):
-- Raw pointers allowed
-- Manual memory management
-- Maximum control
-
-Safe Mode (Recommended):
-- Bounds-checked arrays
-- Automatic zero-initialization
-- Safer union behaviour
-- Optional lifetime validation (future)
-
-Example:
-```
-u32[10] arr;  // bounds-checked array
+```text
+Pine source
+  -> lexer
+  -> parser
+  -> AST
+  -> semantic and safety checks
+  -> optional textual IR dump
+  -> C backend
 ```
 
-Future Safety Roadmap:
-- Optional ownership model
-- Borrow checking mode
-- Safer pointer annotations
+The C backend remains the production path while the IR and future native backend are being designed.
 
-Pine does not force safety — developers choose the appropriate level of control for their project.
+## Current Safety Features
 
-# Installing
-## From source
+Safe-by-default behavior already started:
+
+- fixed-array indexing emits bounds checks
+- constant out-of-bounds indexes are rejected
+- slice indexing emits bounds checks
+- raw pointer dereference requires `unsafe`
+- nullable values must be checked before normal use
+- unreachable statements after `return` are warnings
+- explicit `move(value)` starts ownership tracking
+
+## Current Standard Library Seed
+
+The `std/` folder contains source-only Pine modules:
+
+- `std.math`
+- `std.array`
+
+These modules are intentionally tiny. They are used to exercise imports and give the language a foundation for later standard library growth.
+
+## Current CLI
+
+```sh
+pine <file>            # transpile to C on stdout
+pine transpile <file>  # explicit transpile mode
+pine build <file>      # emit C and compile it with a C compiler
+pine run <file>        # build and run
+pine test <file>       # build and run as a test program
+pine ir <file>         # dump textual Pine IR
+pine native <file>     # emit debug-only native backend artifact
 ```
-git clone https://github.com/pine-lang/pine
-cd pine
-make
-sudo make install
-```
-## Building program
-```
-pine build main.pine
-```
-## Run Directly
-```
-pine run main.pine
-```
+
+## Planned Work
+
+The next large area is native backend exploration. The C backend should remain useful and readable while native backend pieces are developed behind debug-focused commands.

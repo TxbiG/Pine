@@ -1,34 +1,7 @@
-// lexer.c  -- small single-file tokenizer
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include "lexer.h"
+
 #include <ctype.h>
-
-typedef enum {
-    T_EOF,
-    T_IDENT,
-    T_NUMBER,
-    T_STRING,
-    T_CHAR,
-    T_KEYWORD,
-    T_OP,      // operators and punctuation
-    T_COMMENT,
-    T_UNKNOWN
-} TokenKind;
-
-typedef struct {
-    TokenKind kind;
-    char *text;      // allocated
-    int line, col;
-} Token;
-
-typedef struct {
-    const char *src;
-    size_t i;
-    int line, col;
-} Lexer;
-
-const char *keywords[] = { "mov","load","store","if","else","while","return","int","ptr", NULL };
+#include <string.h>
 
 typedef struct {
     const char *name;
@@ -42,158 +15,268 @@ static Keyword keywords[] = {
     {"u64", TOKEN_U64},
     {"u128", TOKEN_U128},
     {"u256", TOKEN_U256},
-
     {"i8", TOKEN_I8},
     {"i16", TOKEN_I16},
     {"i32", TOKEN_I32},
     {"i64", TOKEN_I64},
     {"i128", TOKEN_I128},
     {"i256", TOKEN_I256},
-
     {"bool", TOKEN_BOOL},
     {"char", TOKEN_CHAR},
     {"string", TOKEN_STRING_TYPE},
     {"float", TOKEN_FLOAT},
     {"double", TOKEN_DOUBLE},
     {"void", TOKEN_VOID},
-
+    {"const", TOKEN_CONST},
+    {"static", TOKEN_STATIC},
+    {"inline", TOKEN_INLINE},
     {"enum", TOKEN_ENUM},
     {"struct", TOKEN_STRUCT},
-    {"union", TOKEN_UNION},
     {"class", TOKEN_CLASS},
-
+    {"union", TOKEN_UNION},
+    {"import", TOKEN_IMPORT},
+    {"null", TOKEN_NULL},
     {"if", TOKEN_IF},
     {"else", TOKEN_ELSE},
-    {"elif", TOKEN_ELIF},
     {"while", TOKEN_WHILE},
+    {"for", TOKEN_FOR},
     {"switch", TOKEN_SWITCH},
+    {"case", TOKEN_CASE},
+    {"default", TOKEN_DEFAULT},
+    {"return", TOKEN_RETURN},
+    {"break", TOKEN_BREAK},
+    {"continue", TOKEN_CONTINUE},
+    {"unsafe", TOKEN_UNSAFE},
+    {"__asm__", TOKEN_ASM},
+    {"__volatile__", TOKEN_VOLATILE},
+    {"__attribute__", TOKEN_ATTRIBUTE},
+    {NULL, TOKEN_EOF}
 };
 
-int is_keyword(const char *s){
-    for(int k=0; keywords[k]; ++k)
-        if(strcmp(s, keywords[k])==0) return 1;
-    return 0;
+// Builds a token whose lexeme spans from `start` to the current lexer position.
+static Token make_token(Lexer *lexer, TokenType type, size_t start, int line, int column) {
+    Token token;
+    token.type = type;
+    token.lexeme = lexer->src + start;
+    token.length = lexer->pos - start;
+    token.line = line;
+    token.column = column;
+    return token;
 }
 
-Lexer lexer_init(const char *s){
-    return (Lexer){ .src = s, .i = 0, .line = 1, .col = 1 };
+// Returns the current character without consuming it.
+static char peek(Lexer *lexer) {
+    return lexer->src[lexer->pos];
 }
 
-static char peek(Lexer *L){ return L->src[L->i]; }
-static char get(Lexer *L){
-    char c = L->src[L->i++];
-    if(c == '\n'){ L->line++; L->col = 1; } else L->col++;
+// Returns the following character, or NUL at end of source.
+static char peek_next(Lexer *lexer) {
+    if (lexer->src[lexer->pos] == '\0') {
+        return '\0';
+    }
+    return lexer->src[lexer->pos + 1];
+}
+
+// Consumes one character and updates line/column tracking.
+static char advance(Lexer *lexer) {
+    char c = lexer->src[lexer->pos++];
+    if (c == '\n') {
+        lexer->line++;
+        lexer->column = 1;
+    } else {
+        lexer->column++;
+    }
     return c;
 }
-static int starts_with(Lexer *L, const char *pat){
-    return strncmp(L->src + L->i, pat, strlen(pat)) == 0;
+
+// Consumes and returns a one-character token.
+static Token make_single(Lexer *lexer, TokenType type, int line, int column) {
+    size_t start = lexer->pos;
+    advance(lexer);
+    return make_token(lexer, type, start, line, column);
 }
 
-Token make_token(TokenKind k, const char *text, int line, int col){
-    Token t; t.kind=k; t.text = strdup(text); t.line=line; t.col=col; return t;
+// Skips whitespace plus line and block comments.
+static void skip_space_and_comments(Lexer *lexer) {
+    for (;;) {
+        char c = peek(lexer);
+        if (isspace((unsigned char)c)) {
+            advance(lexer);
+            continue;
+        }
+        if (c == '/' && peek_next(lexer) == '/') {
+            while (peek(lexer) != '\0' && peek(lexer) != '\n') {
+                advance(lexer);
+            }
+            continue;
+        }
+        if (c == '/' && peek_next(lexer) == '*') {
+            advance(lexer);
+            advance(lexer);
+            while (peek(lexer) != '\0') {
+                if (peek(lexer) == '*' && peek_next(lexer) == '/') {
+                    advance(lexer);
+                    advance(lexer);
+                    break;
+                }
+                advance(lexer);
+            }
+            continue;
+        }
+        break;
+    }
 }
 
-Token lex_number(Lexer *L, int st_line, int st_col){
-    size_t start = L->i;
-    // support 0x hex
-    if(peek(L)=='0' && (L->src[L->i+1]=='x' || L->src[L->i+1]=='X')){
-        get(L); get(L);
-        while(isxdigit(peek(L))) get(L);
-    } else {
-        while(isdigit(peek(L))) get(L);
-    }
-    size_t len = L->i - start;
-    char *buf = malloc(len+1); strncpy(buf, L->src+start, len); buf[len]=0;
-    Token t = make_token(T_NUMBER, buf, st_line, st_col);
-    free(buf);
-    return t;
-}
-
-Token lex_ident_or_keyword(Lexer *L, int st_line, int st_col){
-    size_t start = L->i;
-    while(isalnum(peek(L)) || peek(L)=='_') get(L);
-    size_t len = L->i - start;
-    char *buf = malloc(len+1); strncpy(buf, L->src+start, len); buf[len]=0;
-    Token t = is_keyword(buf) ? make_token(T_KEYWORD, buf, st_line, st_col)
-                              : make_token(T_IDENT, buf, st_line, st_col);
-    free(buf);
-    return t;
-}
-
-Token lex_string(Lexer *L, int st_line, int st_col){
-    get(L); // consume opening "
-    size_t start = L->i;
-    while(peek(L) && peek(L) != '"'){
-        if(peek(L) == '\\') { get(L); if(peek(L)) get(L); } // skip escape pair
-        else get(L);
-    }
-    size_t len = L->i - start;
-    char *buf = malloc(len+1); strncpy(buf, L->src+start, len); buf[len]=0;
-    if(peek(L) == '"') get(L); // closing
-    Token t = make_token(T_STRING, buf, st_line, st_col);
-    free(buf);
-    return t;
-}
-
-Token next_token(Lexer *L){
-    while(isspace(peek(L))){
-        get(L);
-    }
-    if(peek(L) == 0) return make_token(T_EOF, "<eof>", L->line, L->col);
-    int st_line = L->line, st_col = L->col;
-    char c = peek(L);
-
-    // comments: // to end of line
-    if(c=='/' && L->src[L->i+1]=='/'){
-        size_t start = L->i;
-        while(peek(L) && peek(L)!='\n') get(L);
-        size_t len = L->i - start;
-        char *buf = malloc(len+1); strncpy(buf, L->src+start, len); buf[len]=0;
-        Token t = make_token(T_COMMENT, buf, st_line, st_col);
-        free(buf);
-        return t;
-    }
-
-    // numbers
-    if(isdigit(c)){
-        return lex_number(L, st_line, st_col);
-    }
-
-    // identifiers / keywords
-    if(isalpha(c) || c=='_'){
-        return lex_ident_or_keyword(L, st_line, st_col);
-    }
-
-    // strings
-    if(c == '"'){
-        return lex_string(L, st_line, st_col);
-    }
-
-    // multi-char ops first
-    const char *multi_ops[] = {"==","!=","<=",">=","<<",">>","<<=","+=","-=","*=","/=", NULL};
-    for(int i=0; multi_ops[i]; ++i){
-        size_t Lm = strlen(multi_ops[i]);
-        if(strncmp(L->src + L->i, multi_ops[i], Lm) == 0){
-            char buf[5]; strncpy(buf, multi_ops[i], Lm); buf[Lm]=0;
-            for(size_t k=0;k<Lm;k++) get(L);
-            return make_token(T_OP, buf, st_line, st_col);
+// Maps identifier text to a keyword token when it is reserved.
+static TokenType keyword_type(const char *text, size_t length) {
+    for (int i = 0; keywords[i].name != NULL; i++) {
+        if (strlen(keywords[i].name) == length &&
+            strncmp(keywords[i].name, text, length) == 0) {
+            return keywords[i].type;
         }
     }
-
-    // single-char ops/punct
-    char one[2] = { get(L), 0 };
-    return make_token(T_OP, one, st_line, st_col);
+    return TOKEN_IDENT;
 }
 
-// demo usage
-int main(void){
-    const char *code = "int x = 0x1F; // sample\nmov r0, x\nif (x == 31) return;";
-    Lexer L = lexer_init(code);
-    for(;;){
-        Token t = next_token(&L);
-        printf("Token: kind=%d text='%s' (line %d col %d)\n", t.kind, t.text, t.line, t.col);
-        if(t.kind == T_EOF) break;
-        free(t.text);
+void lexer_init(Lexer *lexer, const char *source) {
+    lexer->src = source;
+    lexer->pos = 0;
+    lexer->line = 1;
+    lexer->column = 1;
+}
+
+Token lexer_next_token(Lexer *lexer) {
+    skip_space_and_comments(lexer);
+
+    int line = lexer->line;
+    int column = lexer->column;
+    size_t start = lexer->pos;
+    char c = peek(lexer);
+
+    if (c == '\0') {
+        return make_token(lexer, TOKEN_EOF, start, line, column);
     }
-    return 0;
+
+    if (isalpha((unsigned char)c) || c == '_') {
+        while (isalnum((unsigned char)peek(lexer)) || peek(lexer) == '_') {
+            advance(lexer);
+        }
+        return make_token(lexer, keyword_type(lexer->src + start, lexer->pos - start), start, line, column);
+    }
+
+    if (isdigit((unsigned char)c)) {
+        while (isdigit((unsigned char)peek(lexer))) {
+            advance(lexer);
+        }
+        return make_token(lexer, TOKEN_NUMBER, start, line, column);
+    }
+
+    if (c == '"') {
+        advance(lexer);
+        while (peek(lexer) != '\0' && peek(lexer) != '"') {
+            if (peek(lexer) == '\\') {
+                advance(lexer);
+            }
+            advance(lexer);
+        }
+        if (peek(lexer) == '"') {
+            advance(lexer);
+        }
+        return make_token(lexer, TOKEN_STRING, start, line, column);
+    }
+
+    if (c == '\'') {
+        advance(lexer);
+        if (peek(lexer) == '\\') {
+            advance(lexer);
+            if (peek(lexer) != '\0') {
+                advance(lexer);
+            }
+        } else if (peek(lexer) != '\0' && peek(lexer) != '\'') {
+            advance(lexer);
+        }
+        if (peek(lexer) == '\'') {
+            advance(lexer);
+        }
+        return make_token(lexer, TOKEN_CHAR_LITERAL, start, line, column);
+    }
+
+    if (c == '=' && peek_next(lexer) == '=') {
+        advance(lexer);
+        advance(lexer);
+        return make_token(lexer, TOKEN_EQ, start, line, column);
+    }
+    if (c == '!' && peek_next(lexer) == '=') {
+        advance(lexer);
+        advance(lexer);
+        return make_token(lexer, TOKEN_NEQ, start, line, column);
+    }
+    if (c == '&' && peek_next(lexer) == '&') {
+        advance(lexer);
+        advance(lexer);
+        return make_token(lexer, TOKEN_AND_AND, start, line, column);
+    }
+    if (c == '|' && peek_next(lexer) == '|') {
+        advance(lexer);
+        advance(lexer);
+        return make_token(lexer, TOKEN_OR_OR, start, line, column);
+    }
+    if (c == '<' && peek_next(lexer) == '<') {
+        advance(lexer);
+        advance(lexer);
+        return make_token(lexer, TOKEN_LSHIFT, start, line, column);
+    }
+    if (c == '>' && peek_next(lexer) == '>') {
+        advance(lexer);
+        advance(lexer);
+        return make_token(lexer, TOKEN_RSHIFT, start, line, column);
+    }
+    if (c == '<' && peek_next(lexer) == '=') {
+        advance(lexer);
+        advance(lexer);
+        return make_token(lexer, TOKEN_LTE, start, line, column);
+    }
+    if (c == '>' && peek_next(lexer) == '=') {
+        advance(lexer);
+        advance(lexer);
+        return make_token(lexer, TOKEN_GTE, start, line, column);
+    }
+    if (c == '[' && peek_next(lexer) == '[') {
+        advance(lexer);
+        advance(lexer);
+        return make_token(lexer, TOKEN_LDBRACKET, start, line, column);
+    }
+    if (c == ']' && peek_next(lexer) == ']') {
+        advance(lexer);
+        advance(lexer);
+        return make_token(lexer, TOKEN_RDBRACKET, start, line, column);
+    }
+
+    switch (c) {
+        case '+': return make_single(lexer, TOKEN_PLUS, line, column);
+        case '-': return make_single(lexer, TOKEN_MINUS, line, column);
+        case '*': return make_single(lexer, TOKEN_STAR, line, column);
+        case '/': return make_single(lexer, TOKEN_SLASH, line, column);
+        case '%': return make_single(lexer, TOKEN_PERCENT, line, column);
+        case '!': return make_single(lexer, TOKEN_BANG, line, column);
+        case '&': return make_single(lexer, TOKEN_AND, line, column);
+        case '|': return make_single(lexer, TOKEN_OR, line, column);
+        case '^': return make_single(lexer, TOKEN_XOR, line, column);
+        case '~': return make_single(lexer, TOKEN_TILDE, line, column);
+        case '?': return make_single(lexer, TOKEN_QUESTION, line, column);
+        case '=': return make_single(lexer, TOKEN_ASSIGN, line, column);
+        case '<': return make_single(lexer, TOKEN_LT, line, column);
+        case '>': return make_single(lexer, TOKEN_GT, line, column);
+        case '(': return make_single(lexer, TOKEN_LPAREN, line, column);
+        case ')': return make_single(lexer, TOKEN_RPAREN, line, column);
+        case '{': return make_single(lexer, TOKEN_LBRACE, line, column);
+        case '}': return make_single(lexer, TOKEN_RBRACE, line, column);
+        case '[': return make_single(lexer, TOKEN_LBRACKET, line, column);
+        case ']': return make_single(lexer, TOKEN_RBRACKET, line, column);
+        case '.': return make_single(lexer, TOKEN_DOT, line, column);
+        case ',': return make_single(lexer, TOKEN_COMMA, line, column);
+        case ';': return make_single(lexer, TOKEN_SEMI, line, column);
+        case ':': return make_single(lexer, TOKEN_COLON, line, column);
+        default: return make_single(lexer, TOKEN_ERROR, line, column);
+    }
 }

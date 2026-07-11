@@ -4,13 +4,7 @@
 #include "ast.h"
 #include <stdio.h>
 
-// Output target type
-typedef enum {
-    TARGET_X86,
-    TARGET_BYTECODE
-} CodegenTarget;
-
-// ===== API =====
-void codegen_generate(ASTNode *root, FILE *out, CodegenTarget target);
+// Emits C source for a semantically checked Pine AST.
+void codegen_generate_c(ASTNode *root, FILE *out);
 
 #endif

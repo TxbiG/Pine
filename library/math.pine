@@ -1,0 +1,37 @@
+i32 std_abs_i32(i32 value) {
+    if (value < 0) {
+        return -value;
+    }
+    return value;
+}
+
+i32 std_min_i32(i32 a, i32 b) {
+    if (a < b) {
+        return a;
+    }
+    return b;
+}
+
+i32 std_max_i32(i32 a, i32 b) {
+    if (a > b) {
+        return a;
+    }
+    return b;
+}
+
+i32 add(i32 a, i32 b) {
+    return a + b;
+}
+
+i32 square(i32 value) {
+    return value * value;
+}
+
+
+i32 std_clamp_i32(i32 value, i32 low, i32 high) {
+    return std_min_i32(std_max_i32(value, low), high);
+}
+
+i32 std_square_i32(i32 value) {
+    return value * value;
+}
