@@ -1,0 +1,78 @@
+pine_native_debug 0
+target x86_64
+target_triple x86_64-unknown-none
+target_pointer_width 64
+target_endianness little
+target_stack_alignment 16
+instruction_set stack-vm-text
+instruction_selection unsupported
+abi unsupported
+object_emission unsupported
+artifact_format debug-text
+expression_lowering operand-stack
+control_flow labels-and-jumps
+
+calls frame-slots
+
+layout debug-primitive-sizes
+layout_note sizes_follow_c_backend_assumptions
+
+source ir
+
+
+FUNC add_twice RET i32
+  FRAME_BEGIN add_twice
+  FRAME_PARAM 0 i32 value size=4 align=4 offset=0
+  FRAME_PARAM 1 i32 amount size=4 align=4 offset=4
+  SCOPE_BEGIN depth=1
+  FRAME_LOCAL 2 i32 first size=4 align=4 offset=8
+  LOAD_SLOT 0 ; value
+  LOAD_SLOT 1 ; amount
+  ADD
+  STORE_SLOT 2 ; first
+  FRAME_LOCAL 3 i32 second size=4 align=4 offset=12
+  LOAD_SLOT 2 ; first
+  LOAD_SLOT 1 ; amount
+  ADD
+  STORE_SLOT 3 ; second
+  LOAD_SLOT 3 ; second
+  RETURN_VALUE
+  RET
+  SCOPE_END depth=1
+  FRAME_SIZE 16 align=4
+  FRAME_STACK_SIZE 16 stack_align=16
+  OPERAND_STACK_MAX 2
+  FRAME_END add_twice slots=4
+END_FUNC
+
+FUNC main RET i32
+  FRAME_BEGIN main
+  SCOPE_BEGIN depth=1
+  FRAME_LOCAL 0 i32 result size=4 align=4 offset=0
+  PUSH_I64 3
+  PUSH_I64 4
+  CALL add_twice argc=2 returns=1
+  STORE_SLOT 0 ; result
+  LOAD_SLOT 0 ; result
+  PUSH_I64 10
+  CMP_GT
+  JUMP_IF_FALSE L_else_0
+  SCOPE_BEGIN depth=2
+  LOAD_SLOT 0 ; result
+  PUSH_I64 1
+  SUB
+  STORE_SLOT 0 ; result
+  SCOPE_END depth=2
+  JUMP L_end_if_1
+  LABEL L_else_0
+  LABEL L_end_if_1
+  LOAD_SLOT 0 ; result
+  RETURN_VALUE
+  RET
+  SCOPE_END depth=1
+  FRAME_SIZE 4 align=4
+  FRAME_STACK_SIZE 16 stack_align=16
+  OPERAND_STACK_MAX 2
+  FRAME_END main slots=1
+END_FUNC
+

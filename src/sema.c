@@ -22,6 +22,7 @@ typedef enum {
     TYPE_U32,
     TYPE_U64,
     TYPE_STRUCT,
+    TYPE_ENUM,
     TYPE_POINTER,
     TYPE_ARRAY,
     TYPE_SLICE,
@@ -29,11 +30,14 @@ typedef enum {
     TYPE_NULLABLE
 } TypeKind;
 
+#define TYPE_NESTING_MAX 8
+
 typedef struct {
     TypeKind kind;
     const char *name;
-    TypeKind element_kind;
-    const char *element_name;
+    TypeKind element_kinds[TYPE_NESTING_MAX];
+    const char *element_names[TYPE_NESTING_MAX];
+    size_t element_depth;
     size_t array_size;
 } Type;
 
@@ -43,6 +47,8 @@ typedef struct {
     int is_const;
     int is_checked_nullable;
     int is_moved;
+    const char *source_file;
+    int is_public;
 } Symbol;
 
 typedef struct Scope Scope;
@@ -55,22 +61,36 @@ struct Scope {
 
 typedef struct {
     const char *name;
+    ASTNode *values;
+    const char *source_file;
+    int is_public;
+} EnumSymbol;
+
+typedef struct {
+    const char *name;
     ASTNode *fields;
+    const char *source_file;
+    int is_public;
 } StructSymbol;
 
 typedef struct {
     const char *name;
     Type return_type;
     ASTNode *params;
+    const char *source_file;
+    int is_public;
 } FunctionSymbol;
 
 typedef struct {
+    EnumSymbol *enums;
+    size_t enum_count;
     StructSymbol *structs;
     size_t struct_count;
     FunctionSymbol *functions;
     size_t function_count;
     Scope *scope;
     Type current_return_type;
+    const char *current_source_file;
     int loop_depth;
     int switch_depth;
     int unsafe_depth;
@@ -83,76 +103,56 @@ static Type type_unknown(void) { return (Type){TYPE_UNKNOWN}; }
 static Type type_i32(void) { return (Type){TYPE_I32}; }
 static Type type_bool(void) { return (Type){TYPE_BOOL}; }
 static Type type_struct(const char *name) { return (Type){TYPE_STRUCT, name}; }
+static Type type_enum(const char *name) { return (Type){TYPE_ENUM, name}; }
 static Type type_null(void) { return (Type){TYPE_NULL}; }
-static Type type_pointer(Type element) {
+static Type type_wrap(TypeKind kind, Type element) {
     Type type = {0};
-    type.kind = TYPE_POINTER;
-    type.element_kind = element.kind;
-    type.element_name = element.name;
+    type.kind = kind;
+    type.element_kinds[0] = element.kind;
+    type.element_names[0] = element.name;
+    type.element_depth = element.element_depth + 1;
+    if (type.element_depth > TYPE_NESTING_MAX) {
+        return type_unknown();
+    }
+    for (size_t i = 0; i < element.element_depth; i++) {
+        type.element_kinds[i + 1] = element.element_kinds[i];
+        type.element_names[i + 1] = element.element_names[i];
+    }
     return type;
 }
 
-// Builds a nullable type from an inner value type.
-static Type type_nullable(Type element) {
-    Type type = {0};
-    type.kind = TYPE_NULLABLE;
-    type.element_kind = element.kind;
-    type.element_name = element.name;
-    return type;
-}
-// Builds a fixed-size array type from an element type.
+static Type type_pointer(Type element) { return type_wrap(TYPE_POINTER, element); }
+static Type type_nullable(Type element) { return type_wrap(TYPE_NULLABLE, element); }
+static Type type_slice(Type element) { return type_wrap(TYPE_SLICE, element); }
+
 static Type type_array(Type element, size_t size) {
-    Type type = {0};
-    type.kind = TYPE_ARRAY;
-    type.element_kind = element.kind;
-    type.element_name = element.name;
+    Type type = type_wrap(TYPE_ARRAY, element);
     type.array_size = size;
     return type;
 }
 
-// Builds a slice type from an element type.
-static Type type_slice(Type element) {
+static Type type_element(Type container) {
+    if (container.element_depth == 0) return type_unknown();
     Type type = {0};
-    type.kind = TYPE_SLICE;
-    type.element_kind = element.kind;
-    type.element_name = element.name;
+    type.kind = container.element_kinds[0];
+    type.name = container.element_names[0];
+    type.element_depth = container.element_depth - 1;
+    for (size_t i = 0; i < type.element_depth; i++) {
+        type.element_kinds[i] = container.element_kinds[i + 1];
+        type.element_names[i] = container.element_names[i + 1];
+    }
     return type;
 }
 
-// Extracts the element type stored inside an array type.
-static Type array_element_type(Type array) {
-    Type type = {0};
-    type.kind = array.element_kind;
-    type.name = array.element_name;
-    return type;
-}
+static Type array_element_type(Type array) { return type_element(array); }
+static Type slice_element_type(Type slice) { return type_element(slice); }
+static Type pointer_element_type(Type pointer) { return type_element(pointer); }
+static Type nullable_element_type(Type nullable) { return type_element(nullable); }
 
-// Extracts the element type stored inside a slice type.
-static Type slice_element_type(Type slice) {
-    Type type = {0};
-    type.kind = slice.element_kind;
-    type.name = slice.element_name;
-    return type;
-}
-
-// Extracts the pointee type stored inside a pointer type.
-static Type pointer_element_type(Type pointer) {
-    Type type = {0};
-    type.kind = pointer.element_kind;
-    type.name = pointer.element_name;
-    return type;
-}
-
-// Extracts the inner value type stored inside a nullable type.
-static Type nullable_element_type(Type nullable) {
-    Type type = {0};
-    type.kind = nullable.element_kind;
-    type.name = nullable.element_name;
-    return type;
-}
-
-// Forward declaration used while converting struct type names.
+// Forward declarations used while converting named types.
+static EnumSymbol *find_enum(Sema *sema, const char *name);
 static StructSymbol *find_struct(Sema *sema, const char *name);
+static int sema_can_access(Sema *sema, const char *source_file, int is_public);
 
 // Converts a non-pointer type spelling into a semantic type.
 static Type type_from_base_name(Sema *sema, const char *name) {
@@ -170,7 +170,14 @@ static Type type_from_base_name(Sema *sema, const char *name) {
     if (strcmp(name, "u16") == 0) return (Type){TYPE_U16};
     if (strcmp(name, "u32") == 0) return (Type){TYPE_U32};
     if (strcmp(name, "u64") == 0) return (Type){TYPE_U64};
-    if (find_struct(sema, name)) return type_struct(name);
+    StructSymbol *struct_symbol = find_struct(sema, name);
+    if (struct_symbol && sema_can_access(sema, struct_symbol->source_file, struct_symbol->is_public)) {
+        return type_struct(name);
+    }
+    EnumSymbol *enum_symbol = find_enum(sema, name);
+    if (enum_symbol && sema_can_access(sema, enum_symbol->source_file, enum_symbol->is_public)) {
+        return type_enum(name);
+    }
     return type_unknown();
 }
 
@@ -185,7 +192,7 @@ static Type type_from_name(Sema *sema, const char *name) {
         memcpy(inner_name, name, full_length - 1);
         inner_name[full_length - 1] = '\0';
         Type inner = type_from_name(sema, inner_name);
-        if (inner.kind == TYPE_UNKNOWN || inner.kind == TYPE_VOID) {
+        if (inner.kind != TYPE_POINTER) {
             return type_unknown();
         }
         return type_nullable(inner);
@@ -196,7 +203,10 @@ static Type type_from_name(Sema *sema, const char *name) {
         if (element.kind == TYPE_UNKNOWN) {
             return element;
         }
-        if (element.kind == TYPE_VOID) {
+        if (element.kind == TYPE_VOID || element.kind == TYPE_STRUCT ||
+            element.kind == TYPE_POINTER || element.kind == TYPE_SLICE ||
+            element.kind == TYPE_ARRAY || element.kind == TYPE_NULLABLE ||
+            element.kind == TYPE_STRING) {
             return type_unknown();
         }
         return type_slice(element);
@@ -248,6 +258,7 @@ static const char *type_name(Type type) {
         case TYPE_U32: return "u32";
         case TYPE_U64: return "u64";
         case TYPE_STRUCT: return type.name;
+        case TYPE_ENUM: return type.name;
         case TYPE_POINTER: return "pointer";
         case TYPE_ARRAY: return "array";
         case TYPE_SLICE: return "slice";
@@ -258,38 +269,20 @@ static const char *type_name(Type type) {
     return "<unknown>";
 }
 
-// Checks exact type identity, including struct names and array sizes.
+// Checks exact type identity, including nested wrappers and array sizes.
 static int same_type(Type a, Type b) {
-    if (a.kind == TYPE_ARRAY || b.kind == TYPE_ARRAY) {
-        return a.kind == TYPE_ARRAY && b.kind == TYPE_ARRAY &&
-               a.element_kind == b.element_kind &&
-               a.array_size == b.array_size &&
-               ((a.element_name == NULL && b.element_name == NULL) ||
-                (a.element_name && b.element_name && strcmp(a.element_name, b.element_name) == 0));
+    if (a.kind != b.kind || a.element_depth != b.element_depth) return 0;
+    if (a.kind == TYPE_ARRAY && a.array_size != b.array_size) return 0;
+    if ((a.kind == TYPE_STRUCT || a.kind == TYPE_ENUM) &&
+        (!a.name || !b.name || strcmp(a.name, b.name) != 0)) return 0;
+    for (size_t i = 0; i < a.element_depth; i++) {
+        if (a.element_kinds[i] != b.element_kinds[i]) return 0;
+        const char *an = a.element_names[i];
+        const char *bn = b.element_names[i];
+        if ((an == NULL) != (bn == NULL)) return 0;
+        if (an && strcmp(an, bn) != 0) return 0;
     }
-    if (a.kind == TYPE_SLICE || b.kind == TYPE_SLICE) {
-        return a.kind == TYPE_SLICE && b.kind == TYPE_SLICE &&
-               a.element_kind == b.element_kind &&
-               ((a.element_name == NULL && b.element_name == NULL) ||
-                (a.element_name && b.element_name && strcmp(a.element_name, b.element_name) == 0));
-    }
-    if (a.kind == TYPE_NULLABLE || b.kind == TYPE_NULLABLE) {
-        return a.kind == TYPE_NULLABLE && b.kind == TYPE_NULLABLE &&
-               a.element_kind == b.element_kind &&
-               ((a.element_name == NULL && b.element_name == NULL) ||
-                (a.element_name && b.element_name && strcmp(a.element_name, b.element_name) == 0));
-    }
-    if (a.kind == TYPE_POINTER || b.kind == TYPE_POINTER) {
-        return a.kind == TYPE_POINTER && b.kind == TYPE_POINTER &&
-               a.element_kind == b.element_kind &&
-               ((a.element_name == NULL && b.element_name == NULL) ||
-                (a.element_name && b.element_name && strcmp(a.element_name, b.element_name) == 0));
-    }
-    if (a.kind == TYPE_STRUCT || b.kind == TYPE_STRUCT) {
-        return a.kind == TYPE_STRUCT && b.kind == TYPE_STRUCT &&
-               strcmp(a.name, b.name) == 0;
-    }
-    return a.kind == b.kind;
+    return 1;
 }
 
 // Type classification helpers used by operator checks.
@@ -337,6 +330,8 @@ static int is_copy_type(Type type) {
         case TYPE_NULL:
         case TYPE_NULLABLE:
             return 1;
+        case TYPE_ENUM:
+            return 1;
         case TYPE_STRUCT:
         case TYPE_ARRAY:
         case TYPE_UNKNOWN:
@@ -376,6 +371,29 @@ static Type arithmetic_result(Type left, Type right) {
     return type_unknown();
 }
 
+static void sema_print_snippet(ASTNode *node) {
+    if (!node || !node->source_file || node->line <= 0) return;
+    FILE *file = fopen(node->source_file, "rb");
+    if (!file) return;
+    char line[1024];
+    int current = 1;
+    while (fgets(line, sizeof(line), file)) {
+        if (current++ != node->line) continue;
+        size_t length = strlen(line);
+        while (length > 0 && (line[length - 1] == '\n' || line[length - 1] == '\r')) line[--length] = '\0';
+        fprintf(stderr, "  %s\n  ", line);
+        for (int i = 1; i < node->column; i++) fputc(line[i - 1] == '\t' ? '\t' : ' ', stderr);
+        fprintf(stderr, "^\n");
+        break;
+    }
+    fclose(file);
+}
+
+static int sema_can_access(Sema *sema, const char *source_file, int is_public) {
+    return is_public || !source_file || !sema->current_source_file ||
+           strcmp(source_file, sema->current_source_file) == 0;
+}
+
 // Records a semantic error without source location information.
 static void sema_error(Sema *sema, const char *message, const char *name) {
     if (name) {
@@ -390,12 +408,15 @@ static void sema_error(Sema *sema, const char *message, const char *name) {
 static void sema_error_at(Sema *sema, ASTNode *node, const char *message, const char *name) {
     if (node && node->line > 0) {
         if (name) {
-            fprintf(stderr, "Pine semantic error at line %d, column %d: %s '%s'\n",
+            fprintf(stderr, "%s:%d:%d: Pine semantic error: %s '%s'\n",
+                    node->source_file ? node->source_file : "<input>",
                     node->line, node->column, message, name);
         } else {
-            fprintf(stderr, "Pine semantic error at line %d, column %d: %s\n",
+            fprintf(stderr, "%s:%d:%d: Pine semantic error: %s\n",
+                    node->source_file ? node->source_file : "<input>",
                     node->line, node->column, message);
         }
+        sema_print_snippet(node);
         sema->errors++;
         return;
     }
@@ -412,8 +433,10 @@ static void type_error(Sema *sema, const char *message, Type expected, Type actu
 // Records a type mismatch using an AST node location when available.
 static void type_error_at(Sema *sema, ASTNode *node, const char *message, Type expected, Type actual) {
     if (node && node->line > 0) {
-        fprintf(stderr, "Pine semantic error at line %d, column %d: %s: expected %s, got %s\n",
+        fprintf(stderr, "%s:%d:%d: Pine semantic error: %s: expected %s, got %s\n",
+                node->source_file ? node->source_file : "<input>",
                 node->line, node->column, message, type_name(expected), type_name(actual));
+        sema_print_snippet(node);
         sema->errors++;
         return;
     }
@@ -439,7 +462,7 @@ static void sema_warning_at(Sema *sema, ASTNode *node, const char *message, cons
 }
 
 // Evaluates the small subset of integer constants needed for bounds checks.
-static int constant_integer_value(ASTNode *expr, long *value) {
+static int constant_integer_value(ASTNode *expr, long long *value) {
     if (expr->type == AST_NUMBER) {
         *value = expr->number.value;
         return 1;
@@ -496,8 +519,19 @@ static void add_symbol(Sema *sema, const char *name, Type type, int is_const) {
 
     size_t next = sema->scope->count + 1;
     sema->scope->symbols = realloc(sema->scope->symbols, next * sizeof(Symbol));
-    sema->scope->symbols[sema->scope->count] = (Symbol){name, type, is_const, 0, 0};
+    sema->scope->symbols[sema->scope->count] =
+        (Symbol){name, type, is_const, 0, 0, sema->current_source_file, 0};
     sema->scope->count = next;
+}
+
+static void add_top_symbol(Sema *sema, const char *name, Type type, int is_const,
+                           const char *source_file, int is_public) {
+    add_symbol(sema, name, type, is_const);
+    Symbol *symbol = find_local_symbol(sema->scope, name);
+    if (symbol) {
+        symbol->source_file = source_file;
+        symbol->is_public = is_public;
+    }
 }
 
 // Adds a non-null checked shadow for a nullable symbol inside a narrowed scope.
@@ -505,7 +539,8 @@ static void add_checked_nullable_symbol(Sema *sema, const char *name, Type nulla
     Type inner = nullable_element_type(nullable_type);
     size_t next = sema->scope->count + 1;
     sema->scope->symbols = realloc(sema->scope->symbols, next * sizeof(Symbol));
-    sema->scope->symbols[sema->scope->count] = (Symbol){name, inner, 0, 1, 0};
+    sema->scope->symbols[sema->scope->count] =
+        (Symbol){name, inner, 0, 1, 0, sema->current_source_file, 0};
     sema->scope->count = next;
 }
 
@@ -524,6 +559,86 @@ static void mark_moved_if_needed(Sema *sema, ASTNode *expr) {
 
     if (!is_copy_type(symbol->type)) {
         symbol->is_moved = 1;
+    }
+}
+
+typedef struct {
+    Symbol **symbols;
+    int *moved;
+    size_t count;
+} MoveState;
+
+static MoveState capture_move_state(Sema *sema) {
+    MoveState state = {0};
+    for (Scope *scope = sema->scope; scope; scope = scope->parent) state.count += scope->count;
+    state.symbols = state.count ? malloc(state.count * sizeof(Symbol *)) : NULL;
+    state.moved = state.count ? malloc(state.count * sizeof(int)) : NULL;
+    size_t index = 0;
+    for (Scope *scope = sema->scope; scope; scope = scope->parent) {
+        for (size_t i = 0; i < scope->count; i++) {
+            state.symbols[index] = &scope->symbols[i];
+            state.moved[index] = scope->symbols[i].is_moved;
+            index++;
+        }
+    }
+    return state;
+}
+
+static void restore_move_state(const MoveState *state) {
+    for (size_t i = 0; i < state->count; i++) state->symbols[i]->is_moved = state->moved[i];
+}
+
+static void merge_move_states(const MoveState *left, const MoveState *right) {
+    for (size_t i = 0; i < left->count; i++) {
+        left->symbols[i]->is_moved = left->moved[i] || right->moved[i];
+    }
+}
+
+static void free_move_state(MoveState *state) {
+    free(state->symbols);
+    free(state->moved);
+    *state = (MoveState){0};
+}
+
+static EnumSymbol *find_enum(Sema *sema, const char *name) {
+    for (size_t i = 0; i < sema->enum_count; i++) {
+        if (strcmp(sema->enums[i].name, name) == 0) return &sema->enums[i];
+    }
+    return NULL;
+}
+
+static void collect_enums(Sema *sema, ASTNode *root) {
+    for (size_t i = 0; i < root->list.count; i++) {
+        ASTNode *node = root->list.items[i];
+        if (node->type != AST_ENUM_DECL) continue;
+        if (find_enum(sema, node->enum_decl.name)) {
+            sema_error_at(sema, node, "duplicate enum", node->enum_decl.name);
+            continue;
+        }
+        size_t next = sema->enum_count + 1;
+        sema->enums = realloc(sema->enums, next * sizeof(EnumSymbol));
+        sema->enums[sema->enum_count++] =
+            (EnumSymbol){node->enum_decl.name, node->enum_decl.values, node->source_file, node->is_public};
+        for (size_t j = 0; j < node->enum_decl.values->list.count; j++) {
+            ASTNode *value = node->enum_decl.values->list.items[j];
+            for (size_t k = j + 1; k < node->enum_decl.values->list.count; k++) {
+                ASTNode *other = node->enum_decl.values->list.items[k];
+                if (strcmp(value->enum_value.name, other->enum_value.name) == 0) {
+                    sema_error_at(sema, other, "duplicate enum value", other->enum_value.name);
+                }
+            }
+        }
+    }
+}
+
+static void add_enum_values(Sema *sema) {
+    for (size_t i = 0; i < sema->enum_count; i++) {
+        EnumSymbol *symbol = &sema->enums[i];
+        for (size_t j = 0; j < symbol->values->list.count; j++) {
+            ASTNode *value = symbol->values->list.items[j];
+            add_top_symbol(sema, value->enum_value.name, type_enum(symbol->name), 1,
+                           symbol->source_file, symbol->is_public);
+        }
     }
 }
 
@@ -569,7 +684,9 @@ static void collect_structs(Sema *sema, ASTNode *root) {
         sema->structs = realloc(sema->structs, next * sizeof(StructSymbol));
         sema->structs[sema->struct_count] = (StructSymbol){
             node->struct_decl.name,
-            node->struct_decl.fields
+            node->struct_decl.fields,
+            node->source_file,
+            node->is_public
         };
         sema->struct_count = next;
     }
@@ -579,6 +696,7 @@ static void collect_structs(Sema *sema, ASTNode *root) {
 static void analyze_structs(Sema *sema) {
     for (size_t i = 0; i < sema->struct_count; i++) {
         StructSymbol *struct_symbol = &sema->structs[i];
+        sema->current_source_file = struct_symbol->source_file;
 
         for (size_t j = 0; j < struct_symbol->fields->list.count; j++) {
             ASTNode *field = struct_symbol->fields->list.items[j];
@@ -613,6 +731,7 @@ static void collect_functions(Sema *sema, ASTNode *root) {
             continue;
         }
 
+        sema->current_source_file = fn->source_file;
         Type return_type = type_from_name(sema, fn->function.return_type);
         if (return_type.kind == TYPE_UNKNOWN) {
             sema_error(sema, "unknown function return type", fn->function.return_type);
@@ -623,7 +742,9 @@ static void collect_functions(Sema *sema, ASTNode *root) {
         sema->functions[sema->function_count] = (FunctionSymbol){
             fn->function.name,
             return_type,
-            fn->function.params
+            fn->function.params,
+            fn->source_file,
+            fn->is_public
         };
         sema->function_count = next;
     }
@@ -643,6 +764,17 @@ static int is_constant_initializer(ASTNode *expr) {
         case AST_CHAR_LITERAL:
         case AST_STRING_LITERAL:
         case AST_NULL_LITERAL:
+        case AST_BOOL_LITERAL:
+            return 1;
+        case AST_ARRAY_LITERAL:
+            for (size_t i = 0; i < expr->list.count; i++) {
+                if (!is_constant_initializer(expr->list.items[i])) return 0;
+            }
+            return 1;
+        case AST_STRUCT_LITERAL:
+            for (size_t i = 0; i < expr->struct_literal.fields->list.count; i++) {
+                if (!is_constant_initializer(expr->struct_literal.fields->list.items[i]->field_init.value)) return 0;
+            }
             return 1;
         case AST_UNARY_EXPR:
             return (expr->unary.op == TOKEN_MINUS || expr->unary.op == TOKEN_TILDE) &&
@@ -694,6 +826,14 @@ static Type analyze_unary(Sema *sema, ASTNode *expr) {
             }
             return operand;
         case TOKEN_AND:
+            if (expr->unary.operand->type != AST_IDENTIFIER &&
+                expr->unary.operand->type != AST_FIELD_EXPR &&
+                expr->unary.operand->type != AST_INDEX_EXPR &&
+                !(expr->unary.operand->type == AST_UNARY_EXPR &&
+                  expr->unary.operand->unary.op == TOKEN_STAR)) {
+                sema_error_at(sema, expr, "address-of requires an assignable value", NULL);
+                return type_unknown();
+            }
             if (operand.kind == TYPE_VOID) {
                 sema_error_at(sema, expr, "cannot take address of void value", NULL);
                 return type_unknown();
@@ -817,6 +957,9 @@ static Type analyze_call(Sema *sema, ASTNode *expr) {
         sema_error_at(sema, expr, "unknown function", expr->call.name);
         return type_unknown();
     }
+    if (!sema_can_access(sema, fn->source_file, fn->is_public)) {
+        sema_error_at(sema, expr, "function is private to another module", expr->call.name);
+    }
 
     if (fn->params->list.count != expr->call.args->list.count) {
         sema_error_at(sema, expr, "wrong number of arguments for function", expr->call.name);
@@ -826,6 +969,7 @@ static Type analyze_call(Sema *sema, ASTNode *expr) {
     for (size_t i = 0; i < expr->call.args->list.count; i++) {
         ASTNode *param = fn->params->list.items[i];
         Type expected = type_from_name(sema, param->param.param_type);
+        if (param->param.array_size > 0) expected = type_array(expected, param->param.array_size);
         Type actual = analyze_expr(sema, expr->call.args->list.items[i]);
 
         if (!is_assignable(expected, actual)) {
@@ -847,11 +991,67 @@ static Type analyze_expr(Sema *sema, ASTNode *expr) {
             return (Type){TYPE_STRING};
         case AST_NULL_LITERAL:
             return type_null();
+        case AST_BOOL_LITERAL:
+            return type_bool();
+        case AST_ARRAY_LITERAL: {
+            if (expr->list.count == 0) {
+                sema_error_at(sema, expr, "array initializer cannot be empty", NULL);
+                return type_unknown();
+            }
+            Type element = analyze_expr(sema, expr->list.items[0]);
+            for (size_t i = 1; i < expr->list.count; i++) {
+                Type actual = analyze_expr(sema, expr->list.items[i]);
+                if (!is_assignable(element, actual)) {
+                    type_error_at(sema, expr->list.items[i], "array initializer element mismatch", element, actual);
+                }
+            }
+            return type_array(element, expr->list.count);
+        }
+        case AST_STRUCT_LITERAL: {
+            StructSymbol *symbol = find_struct(sema, expr->struct_literal.type_name);
+            if (!symbol) {
+                sema_error_at(sema, expr, "unknown struct literal type", expr->struct_literal.type_name);
+                return type_unknown();
+            }
+            for (size_t i = 0; i < expr->struct_literal.fields->list.count; i++) {
+                ASTNode *init = expr->struct_literal.fields->list.items[i];
+                ASTNode *field = find_struct_field(symbol, init->field_init.name);
+                if (!field) {
+                    sema_error_at(sema, init, "unknown struct literal field", init->field_init.name);
+                    analyze_expr(sema, init->field_init.value);
+                    continue;
+                }
+                for (size_t j = i + 1; j < expr->struct_literal.fields->list.count; j++) {
+                    ASTNode *other = expr->struct_literal.fields->list.items[j];
+                    if (strcmp(init->field_init.name, other->field_init.name) == 0) {
+                        sema_error_at(sema, other, "duplicate struct literal field", other->field_init.name);
+                    }
+                }
+                Type expected = type_from_name(sema, field->field_decl.field_type);
+                Type actual = analyze_expr(sema, init->field_init.value);
+                if (!is_assignable(expected, actual)) {
+                    type_error_at(sema, init, "struct literal field mismatch", expected, actual);
+                }
+            }
+            for (size_t i = 0; i < symbol->fields->list.count; i++) {
+                ASTNode *field = symbol->fields->list.items[i];
+                int found = 0;
+                for (size_t j = 0; j < expr->struct_literal.fields->list.count; j++) {
+                    ASTNode *init = expr->struct_literal.fields->list.items[j];
+                    if (strcmp(field->field_decl.name, init->field_init.name) == 0) found = 1;
+                }
+                if (!found) sema_error_at(sema, expr, "missing struct literal field", field->field_decl.name);
+            }
+            return type_struct(symbol->name);
+        }
         case AST_IDENTIFIER: {
             Symbol *symbol = find_symbol(sema, expr->identifier.name);
             if (!symbol) {
                 sema_error_at(sema, expr, "unknown identifier", expr->identifier.name);
                 return type_unknown();
+            }
+            if (!sema_can_access(sema, symbol->source_file, symbol->is_public)) {
+                sema_error_at(sema, expr, "name is private to another module", expr->identifier.name);
             }
             if (symbol->is_moved) {
                 sema_error_at(sema, expr, "use after move", expr->identifier.name);
@@ -903,7 +1103,7 @@ static Type analyze_expr(Sema *sema, ASTNode *expr) {
 
             if (object.kind == TYPE_ARRAY) {
                 expr->index.checked_length = object.array_size;
-                long constant_index = 0;
+                long long constant_index = 0;
                 if (constant_integer_value(expr->index.index, &constant_index) &&
                     (constant_index < 0 || (size_t)constant_index >= object.array_size)) {
                     sema_error_at(sema, expr, "array index out of bounds", NULL);
@@ -912,7 +1112,12 @@ static Type analyze_expr(Sema *sema, ASTNode *expr) {
             }
 
             expr->index.checked_is_slice = 1;
-            return slice_element_type(object);
+            Type element = slice_element_type(object);
+            const char *element_name = type_name(element);
+            size_t name_length = strlen(element_name);
+            expr->index.checked_element_type = malloc(name_length + 1);
+            memcpy(expr->index.checked_element_type, element_name, name_length + 1);
+            return element;
         }
         case AST_CALL_EXPR:
             return analyze_call(sema, expr);
@@ -945,6 +1150,31 @@ static const char *nullable_check_name(ASTNode *condition, int want_not_null) {
     return NULL;
 }
 
+static Symbol *lvalue_root_symbol(Sema *sema, ASTNode *target) {
+    if (!target) return NULL;
+    if (target->type == AST_IDENTIFIER) return find_symbol(sema, target->identifier.name);
+    if (target->type == AST_FIELD_EXPR) return lvalue_root_symbol(sema, target->field.object);
+    if (target->type == AST_INDEX_EXPR) return lvalue_root_symbol(sema, target->index.object);
+    return NULL;
+}
+
+static Type analyze_lvalue(Sema *sema, ASTNode *target) {
+    if (target->type == AST_IDENTIFIER) {
+        Symbol *symbol = find_symbol(sema, target->identifier.name);
+        if (!symbol) {
+            sema_error_at(sema, target, "unknown identifier", target->identifier.name);
+            return type_unknown();
+        }
+        return symbol->type;
+    }
+    if (target->type == AST_FIELD_EXPR || target->type == AST_INDEX_EXPR ||
+        (target->type == AST_UNARY_EXPR && target->unary.op == TOKEN_STAR)) {
+        return analyze_expr(sema, target);
+    }
+    sema_error_at(sema, target, "expression is not assignable", NULL);
+    return type_unknown();
+}
+
 // Checks one statement and returns whether it definitely returns.
 static int analyze_statement(Sema *sema, ASTNode *stmt) {
     switch (stmt->type) {
@@ -961,6 +1191,9 @@ static int analyze_statement(Sema *sema, ASTNode *stmt) {
             }
             if (stmt->var_decl.value) {
                 Type actual = analyze_expr(sema, stmt->var_decl.value);
+                if (declared.kind == TYPE_ARRAY && stmt->var_decl.value->type != AST_ARRAY_LITERAL) {
+                    sema_error_at(sema, stmt, "fixed arrays require an array initializer literal", NULL);
+                }
                 if (!is_assignable(declared, actual)) {
                     type_error_at(sema, stmt, "initializer type mismatch", declared, actual);
                 }
@@ -969,28 +1202,35 @@ static int analyze_statement(Sema *sema, ASTNode *stmt) {
             return 0;
         }
         case AST_ASSIGN_STMT: {
-            Symbol *symbol = find_symbol(sema, stmt->assign.name);
-            if (!symbol) {
-                sema_error_at(sema, stmt, "unknown identifier", stmt->assign.name);
-                analyze_expr(sema, stmt->assign.value);
-                return 0;
+            Symbol *root = lvalue_root_symbol(sema, stmt->assign.target);
+            if (root && root->is_const) {
+                sema_error_at(sema, stmt, "cannot assign through const value", root->name);
             }
-            if (symbol->is_const) {
-                sema_error_at(sema, stmt, "cannot assign to const", stmt->assign.name);
-            }
+            Type expected = analyze_lvalue(sema, stmt->assign.target);
             Type actual = analyze_expr(sema, stmt->assign.value);
-            if (!is_assignable(symbol->type, actual)) {
-                type_error_at(sema, stmt, "assignment type mismatch", symbol->type, actual);
+            if (expected.kind == TYPE_ARRAY && stmt->assign.target->type == AST_IDENTIFIER) {
+                sema_error_at(sema, stmt, "whole fixed-array assignment is not supported", NULL);
             }
-            symbol->is_moved = 0;
+            if (!is_assignable(expected, actual)) {
+                type_error_at(sema, stmt, "assignment type mismatch", expected, actual);
+            }
+            if (root && stmt->assign.target->type == AST_IDENTIFIER) root->is_moved = 0;
             return 0;
         }
         case AST_EXPR_STMT:
             analyze_expr(sema, stmt->expr_stmt.expr);
             return 0;
         case AST_RETURN_STMT: {
+            if (!stmt->ret.value) {
+                if (sema->current_return_type.kind != TYPE_VOID) {
+                    sema_error_at(sema, stmt, "non-void function must return a value", NULL);
+                }
+                return 1;
+            }
             Type actual = analyze_expr(sema, stmt->ret.value);
-            if (!is_assignable(sema->current_return_type, actual)) {
+            if (sema->current_return_type.kind == TYPE_VOID) {
+                sema_error_at(sema, stmt, "void function cannot return a value", NULL);
+            } else if (!is_assignable(sema->current_return_type, actual)) {
                 type_error_at(sema, stmt, "return type mismatch", sema->current_return_type, actual);
             }
             return 1;
@@ -1002,8 +1242,10 @@ static int analyze_statement(Sema *sema, ASTNode *stmt) {
             }
             const char *checked_then = nullable_check_name(stmt->if_stmt.condition, 1);
             const char *checked_else = nullable_check_name(stmt->if_stmt.condition, 0);
+            MoveState before = capture_move_state(sema);
             int then_returns = 0;
             int else_returns = 0;
+
             if (checked_then) {
                 Symbol *symbol = find_symbol(sema, checked_then);
                 push_scope(sema);
@@ -1015,6 +1257,9 @@ static int analyze_statement(Sema *sema, ASTNode *stmt) {
             } else {
                 then_returns = analyze_block(sema, stmt->if_stmt.then_block);
             }
+            MoveState then_state = capture_move_state(sema);
+            restore_move_state(&before);
+
             if (stmt->if_stmt.else_block) {
                 if (checked_else) {
                     Symbol *symbol = find_symbol(sema, checked_else);
@@ -1028,6 +1273,11 @@ static int analyze_statement(Sema *sema, ASTNode *stmt) {
                     else_returns = analyze_block(sema, stmt->if_stmt.else_block);
                 }
             }
+            MoveState else_state = capture_move_state(sema);
+            merge_move_states(&then_state, &else_state);
+            free_move_state(&before);
+            free_move_state(&then_state);
+            free_move_state(&else_state);
             return then_returns && else_returns;
         }
         case AST_WHILE_STMT: {
@@ -1051,18 +1301,18 @@ static int analyze_statement(Sema *sema, ASTNode *stmt) {
                     type_error_at(sema, stmt->for_stmt.condition, "for condition type mismatch", type_bool(), condition);
                 }
             }
+            sema->loop_depth++;
+            analyze_block(sema, stmt->for_stmt.body);
             if (stmt->for_stmt.step) {
                 analyze_statement(sema, stmt->for_stmt.step);
             }
-            sema->loop_depth++;
-            analyze_block(sema, stmt->for_stmt.body);
             sema->loop_depth--;
             pop_scope(sema);
             return 0;
         }
         case AST_SWITCH_STMT: {
             Type switch_type = analyze_expr(sema, stmt->switch_stmt.expr);
-            if (!is_integer(switch_type)) {
+            if (!is_integer(switch_type) && switch_type.kind != TYPE_ENUM) {
                 sema_error_at(sema, stmt->switch_stmt.expr, "switch expression must be integer", NULL);
             }
 
@@ -1085,12 +1335,23 @@ static int analyze_statement(Sema *sema, ASTNode *stmt) {
                 }
             }
 
+            MoveState before = capture_move_state(sema);
+            MoveState merged = capture_move_state(sema);
             sema->switch_depth++;
             for (size_t i = 0; i < stmt->switch_stmt.cases->list.count; i++) {
+                restore_move_state(&before);
                 ASTNode *case_node = stmt->switch_stmt.cases->list.items[i];
                 analyze_block(sema, case_node->case_stmt.body);
+                MoveState branch = capture_move_state(sema);
+                for (size_t j = 0; j < merged.count; j++) {
+                    merged.moved[j] = merged.moved[j] || branch.moved[j];
+                }
+                free_move_state(&branch);
             }
             sema->switch_depth--;
+            restore_move_state(&merged);
+            free_move_state(&before);
+            free_move_state(&merged);
             return 0;
         }
         case AST_BREAK_STMT:
@@ -1131,6 +1392,7 @@ static int analyze_block(Sema *sema, ASTNode *block) {
 
 // Checks a global variable or const declaration and registers its symbol.
 static void analyze_global(Sema *sema, ASTNode *global) {
+    sema->current_source_file = global->source_file;
     Type declared = type_from_name(sema, global->var_decl.var_type);
     if (declared.kind == TYPE_UNKNOWN) {
         sema_error_at(sema, global, "unknown global type", global->var_decl.var_type);
@@ -1145,6 +1407,9 @@ static void analyze_global(Sema *sema, ASTNode *global) {
         sema_error_at(sema, global, "const global requires initializer", global->var_decl.name);
     }
     if (global->var_decl.value) {
+        if (declared.kind == TYPE_ARRAY && global->var_decl.value->type != AST_ARRAY_LITERAL) {
+            sema_error_at(sema, global, "fixed arrays require an array initializer literal", NULL);
+        }
         if (!is_constant_initializer(global->var_decl.value)) {
             sema_error_at(sema, global, "global initializer must be constant", global->var_decl.name);
         }
@@ -1153,11 +1418,13 @@ static void analyze_global(Sema *sema, ASTNode *global) {
             type_error_at(sema, global, "global initializer type mismatch", declared, actual);
         }
     }
-    add_symbol(sema, global->var_decl.name, declared, global->var_decl.is_const);
+    add_top_symbol(sema, global->var_decl.name, declared, global->var_decl.is_const,
+                   global->source_file, global->is_public);
 }
 
 // Checks parameters, body, and return behavior for one function.
 static void analyze_function(Sema *sema, ASTNode *fn) {
+    sema->current_source_file = fn->source_file;
     sema->current_return_type = type_from_name(sema, fn->function.return_type);
     push_scope(sema);
 
@@ -1165,6 +1432,10 @@ static void analyze_function(Sema *sema, ASTNode *fn) {
         ASTNode *param = fn->function.params->list.items[i];
         Type type = type_from_name(sema, param->param.param_type);
         if (type.kind == TYPE_UNKNOWN) sema_error_at(sema, param, "unknown parameter type", param->param.param_type);
+        if (param->param.array_size > 0) {
+            if (type.kind == TYPE_VOID) sema_error_at(sema, param, "array parameter element cannot be void", NULL);
+            type = type_array(type, param->param.array_size);
+        }
         add_symbol(sema, param->param.name, type, 0);
     }
 
@@ -1178,9 +1449,11 @@ static void analyze_function(Sema *sema, ASTNode *fn) {
 
 int sema_analyze(ASTNode *root, int *warning_count) {
     Sema sema = {0};
+    collect_enums(&sema, root);
     collect_structs(&sema, root);
     analyze_structs(&sema);
     push_scope(&sema);
+    add_enum_values(&sema);
     for (size_t i = 0; i < root->list.count; i++) {
         if (root->list.items[i]->type == AST_VAR_DECL) {
             analyze_global(&sema, root->list.items[i]);
@@ -1193,6 +1466,7 @@ int sema_analyze(ASTNode *root, int *warning_count) {
         }
     }
     pop_scope(&sema);
+    free(sema.enums);
     free(sema.structs);
     free(sema.functions);
     if (warning_count) {

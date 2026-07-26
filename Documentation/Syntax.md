@@ -135,7 +135,26 @@ i32 sum(Vec2 value) {
 }
 ```
 
-Struct declarations, field declarations, and field access are supported.
+Struct declarations, field declarations, field access, field assignment, and
+designated struct literals are supported:
+
+```pine
+Vec2 point = Vec2 { x: 4, y: 8 };
+point.x = 12;
+```
+
+## Enums
+
+```pine
+enum Mode {
+    Idle,
+    Active = 3
+}
+
+Mode mode = Active;
+```
+
+Enum values increment from the previous value when no explicit integer is given.
 
 ## Fixed-Size Arrays
 
@@ -146,7 +165,12 @@ i32 first = values[0];
 
 Fixed-size arrays carry their length through semantic analysis. Indexing emits a runtime bounds check, and constant indexes outside the array length are rejected at compile time.
 
-Array initializer literals are not implemented yet.
+Array initializer literals must match the declared fixed length and element type:
+
+```pine
+i32 values[4] = [1, 2, 3, 4];
+values[1] = 8;
+```
 
 ## Slices
 
@@ -222,6 +246,20 @@ Current copy defaults are conservative:
 - raw pointers and slices are copyable
 - structs and arrays are treated as non-copy for move diagnostics
 
+## Visibility
+
+Top-level declarations are private to their source module by default. Export a
+function, global, struct, or enum with `pub`:
+
+```pine
+pub i32 square(i32 value) {
+    return value * value;
+}
+```
+
+`private` may be written explicitly. Imported code can only use public functions,
+globals, and enum values.
+
 ## Imports
 
 ```pine
@@ -259,9 +297,12 @@ The IR dump is a compiler-development format. It is not yet the production backe
 ## Native Debug Artifact
 
 ```sh
-pine native examples/simple.pine
+pine targets
+pine native examples/simple.pine --target x86_64
+pine native examples/simple.pine --target aarch64
+pine native examples/simple.pine --target riscv64
 ```
 
-The native backend currently emits a debug-only stack-machine-shaped text artifact. It is not executable machine code yet and has no ABI or object-file format.
+The native backend currently emits an architecture-aware, debug-only stack-machine-shaped text artifact. Target aliases include `arm64` and `rv64`. It is not executable machine code yet and has no instruction selection, ABI, or object-file format.
 
 The debug artifact now includes generated labels and jumps for core control flow, simple function frame slots for parameters and locals, and debug-only storage layout metadata. `examples/native_flow.pine` covers control flow, `examples/native_calls.pine` covers multiple functions and calls, and `examples/native_layout.pine` covers frame and struct layout output.

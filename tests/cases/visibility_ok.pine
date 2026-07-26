@@ -1,0 +1,5 @@
+import tests.modules.visibility;
+
+i32 main() {
+    return visible_value() - 7;
+}

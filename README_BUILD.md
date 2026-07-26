@@ -77,7 +77,7 @@ Supported current slice:
 - explicit `move(value)` operation
 - use-after-move diagnostics for non-copy values
 - textual Pine IR dump with `pine ir <file>`
-- debug-only native backend artifact with `pine native <file>`
+- architecture-aware debug native artifacts selected with `pine native <file> --target <name>`
 - native debug frame slots for function parameters and locals
 - native debug call and return-value records
 - native debug storage layout for primitive types, frame slots, globals, and structs
@@ -86,8 +86,9 @@ Current backend status:
 
 - The C backend is the production backend.
 - `pine ir <file>` emits a textual compiler-development IR.
-- `pine native <file>` emits a debug-only stack-VM-shaped artifact.
-- Native backend work has started, but it does not emit real machine code yet.
+- `pine native <file> --target <name>` emits an architecture-aware, debug-only stack-VM-shaped artifact.
+- Supported targets are `x86_64`, `aarch64` (`arm64`), and `riscv64` (`rv64`).
+- Native backend work has started, but instruction selection, ABIs, and object emission remain unsupported.
 - native debug output now uses generated labels and jumps for core control flow.
 - native debug output models parameters and locals as explicit frame slots.
 - native debug output includes debug-only sizes, alignments, and offsets.
@@ -112,7 +113,10 @@ cc src/main.c src/lexer.c src/parser.c src/sema.c src/ast.c src/codegen.c src/ir
 ./pine build examples/simple.pine
 ./pine run examples/simple.pine
 ./pine ir examples/simple.pine
-./pine native examples/simple.pine
+./pine targets
+./pine native examples/simple.pine --target x86_64
+./pine native examples/simple.pine --target aarch64
+./pine native examples/simple.pine --target riscv64
 ./pine native examples/native_flow.pine
 ./pine native examples/native_calls.pine
 ./pine native examples/native_layout.pine
@@ -129,7 +133,9 @@ CLI commands:
 ./pine run <file>         # build and run
 ./pine test <file>        # build and run as a test
 ./pine ir <file>          # dump textual Pine IR
-./pine native <file>      # emit debug-only native backend artifact
+./pine targets            # list supported native debug targets
+./pine native <file> [--target x86_64|aarch64|riscv64]
+                            # emit architecture-aware debug artifact
 ```
 
 Import examples:
@@ -177,3 +183,16 @@ Semantic analysis currently catches:
 - assignment to const names
 - missing returns in non-void functions
 - unreachable statements after return, reported as warnings
+
+
+## Repeatable Build And Tests
+
+```sh
+cmake -S . -B build
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
+On Windows, `tests/run.ps1` runs the same sequence. On Unix-like systems, use
+`tests/run.sh`. When no C compiler is installed, the bundled Python runtime can
+still run `tests/source_syntax_check.py` for a source-level C syntax check.

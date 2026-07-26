@@ -11,6 +11,8 @@ typedef enum {
     TOKEN_CHAR_LITERAL,
     TOKEN_STRING,
     TOKEN_NULL,
+    TOKEN_TRUE,
+    TOKEN_FALSE,
 
     TOKEN_U8,
     TOKEN_U16,
@@ -38,6 +40,8 @@ typedef enum {
     TOKEN_VOID,
 
     TOKEN_CONST,
+    TOKEN_PUB,
+    TOKEN_PRIVATE,
     // Reserved for future storage-class/qualifier support. Not yet
     // consumed by the parser.
     TOKEN_STATIC,
@@ -123,6 +127,10 @@ typedef struct {
     size_t pos;
     int line;
     int column;
+    size_t pending_error_pos;
+    int pending_error_line;
+    int pending_error_column;
+    int has_pending_error;
 } Lexer;
 
 // Initializes the lexer before the first call to lexer_next_token.

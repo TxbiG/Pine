@@ -1,5 +1,3 @@
-#pragma once
-
 i32 main() {
     i32 total = 0;
 

@@ -1,8 +1,7 @@
-#pragma once
-#import std.array;
-#import std.math;
+import std.array;
+import std.math;
 
 i32 main() {
     i32 values[4];
-    return std_max_i32(std_sum4_i32(values), std_index4_i32(values, 0));
+    return std_max_i32(std_sum4_i32(values), std_index_i32(values, 0));
 }

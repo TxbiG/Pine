@@ -3,10 +3,25 @@
 #include <stdlib.h>
 #include <string.h>
 
+static char *copy_text(const char *text);
+
 // Allocates and zero-initializes a node with the given tag.
 static ASTNode *make_node(ASTNodeType type) {
     ASTNode *node = calloc(1, sizeof(ASTNode));
     node->type = type;
+    return node;
+}
+
+ASTNode *ast_set_source_file(ASTNode *node, const char *source_file) {
+    if (node && source_file) {
+        free(node->source_file);
+        node->source_file = copy_text(source_file);
+    }
+    return node;
+}
+
+ASTNode *ast_set_public(ASTNode *node, int is_public) {
+    if (node) node->is_public = is_public != 0;
     return node;
 }
 
@@ -36,6 +51,20 @@ ASTNode *ast_make_import_decl(const char *path) {
     return node;
 }
 
+ASTNode *ast_make_enum_decl(const char *name, ASTNode *values) {
+    ASTNode *node = make_node(AST_ENUM_DECL);
+    node->enum_decl.name = copy_text(name);
+    node->enum_decl.values = values;
+    return node;
+}
+
+ASTNode *ast_make_enum_value(const char *name, long long value) {
+    ASTNode *node = make_node(AST_ENUM_VALUE);
+    node->enum_value.name = copy_text(name);
+    node->enum_value.value = value;
+    return node;
+}
+
 ASTNode *ast_make_block(void) {
     return make_node(AST_BLOCK);
 }
@@ -54,6 +83,20 @@ ASTNode *ast_make_field_decl(const char *field_type, const char *name) {
     return node;
 }
 
+ASTNode *ast_make_field_init(const char *name, ASTNode *value) {
+    ASTNode *node = make_node(AST_FIELD_INIT);
+    node->field_init.name = copy_text(name);
+    node->field_init.value = value;
+    return node;
+}
+
+ASTNode *ast_make_struct_literal(const char *type_name, ASTNode *fields) {
+    ASTNode *node = make_node(AST_STRUCT_LITERAL);
+    node->struct_literal.type_name = copy_text(type_name);
+    node->struct_literal.fields = fields;
+    return node;
+}
+
 ASTNode *ast_make_function(const char *return_type, const char *name, ASTNode *params, ASTNode *body) {
     ASTNode *node = make_node(AST_FUNCTION);
     node->function.return_type = copy_text(return_type);
@@ -63,10 +106,11 @@ ASTNode *ast_make_function(const char *return_type, const char *name, ASTNode *p
     return node;
 }
 
-ASTNode *ast_make_param(const char *param_type, const char *name) {
+ASTNode *ast_make_param(const char *param_type, const char *name, size_t array_size) {
     ASTNode *node = make_node(AST_PARAM);
     node->param.param_type = copy_text(param_type);
     node->param.name = copy_text(name);
+    node->param.array_size = array_size;
     return node;
 }
 
@@ -80,9 +124,9 @@ ASTNode *ast_make_var_decl(const char *var_type, const char *name, size_t array_
     return node;
 }
 
-ASTNode *ast_make_assign(const char *name, ASTNode *value) {
+ASTNode *ast_make_assign(ASTNode *target, ASTNode *value) {
     ASTNode *node = make_node(AST_ASSIGN_STMT);
-    node->assign.name = copy_text(name);
+    node->assign.target = target;
     node->assign.value = value;
     return node;
 }
@@ -130,7 +174,7 @@ ASTNode *ast_make_switch(ASTNode *expr, ASTNode *cases) {
     return node;
 }
 
-ASTNode *ast_make_case(long value, int is_default, ASTNode *body) {
+ASTNode *ast_make_case(long long value, int is_default, ASTNode *body) {
     ASTNode *node = make_node(AST_CASE_STMT);
     node->case_stmt.value = value;
     node->case_stmt.is_default = is_default;
@@ -152,7 +196,7 @@ ASTNode *ast_make_unsafe(ASTNode *body) {
     return node;
 }
 
-ASTNode *ast_make_number(long value) {
+ASTNode *ast_make_number(long long value) {
     ASTNode *node = make_node(AST_NUMBER);
     node->number.value = value;
     return node;
@@ -172,6 +216,21 @@ ASTNode *ast_make_string_literal(const char *text) {
 
 ASTNode *ast_make_null_literal(void) {
     return make_node(AST_NULL_LITERAL);
+}
+
+ASTNode *ast_make_bool_literal(int value) {
+    ASTNode *node = make_node(AST_BOOL_LITERAL);
+    node->boolean.value = value != 0;
+    return node;
+}
+
+ASTNode *ast_make_array_literal(ASTNode *elements) {
+    ASTNode *node = make_node(AST_ARRAY_LITERAL);
+    node->list = elements->list;
+    elements->list.items = NULL;
+    elements->list.count = 0;
+    ast_free(elements);
+    return node;
 }
 
 ASTNode *ast_make_identifier(const char *name) {
@@ -228,9 +287,11 @@ void ast_free(ASTNode *node) {
         return;
     }
 
+    free(node->source_file);
     switch (node->type) {
         case AST_PROGRAM:
         case AST_BLOCK:
+        case AST_ARRAY_LITERAL:
             for (size_t i = 0; i < node->list.count; i++) {
                 ast_free(node->list.items[i]);
             }
@@ -239,6 +300,13 @@ void ast_free(ASTNode *node) {
         case AST_IMPORT_DECL:
             free(node->import_decl.path);
             break;
+        case AST_ENUM_DECL:
+            free(node->enum_decl.name);
+            ast_free(node->enum_decl.values);
+            break;
+        case AST_ENUM_VALUE:
+            free(node->enum_value.name);
+            break;
         case AST_STRUCT_DECL:
             free(node->struct_decl.name);
             ast_free(node->struct_decl.fields);
@@ -246,6 +314,10 @@ void ast_free(ASTNode *node) {
         case AST_FIELD_DECL:
             free(node->field_decl.field_type);
             free(node->field_decl.name);
+            break;
+        case AST_FIELD_INIT:
+            free(node->field_init.name);
+            ast_free(node->field_init.value);
             break;
         case AST_FUNCTION:
             free(node->function.return_type);
@@ -263,7 +335,7 @@ void ast_free(ASTNode *node) {
             ast_free(node->var_decl.value);
             break;
         case AST_ASSIGN_STMT:
-            free(node->assign.name);
+            ast_free(node->assign.target);
             ast_free(node->assign.value);
             break;
         case AST_EXPR_STMT:
@@ -300,6 +372,10 @@ void ast_free(ASTNode *node) {
         case AST_UNSAFE_BLOCK:
             ast_free(node->unsafe_block.body);
             break;
+        case AST_STRUCT_LITERAL:
+            free(node->struct_literal.type_name);
+            ast_free(node->struct_literal.fields);
+            break;
         case AST_IDENTIFIER:
             free(node->identifier.name);
             break;
@@ -308,6 +384,7 @@ void ast_free(ASTNode *node) {
             free(node->literal.text);
             break;
         case AST_NULL_LITERAL:
+        case AST_BOOL_LITERAL:
             break;
         case AST_UNARY_EXPR:
             ast_free(node->unary.operand);
@@ -323,6 +400,7 @@ void ast_free(ASTNode *node) {
         case AST_INDEX_EXPR:
             ast_free(node->index.object);
             ast_free(node->index.index);
+            free(node->index.checked_element_type);
             break;
         case AST_CALL_EXPR:
             free(node->call.name);

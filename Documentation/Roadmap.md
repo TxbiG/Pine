@@ -430,15 +430,15 @@ Needed systems:
 - startup code
 - debug information later
 
-Initial native targets:
+The debug native artifact already accepts architecture/layout metadata for:
 
 - x86_64
-- ARM64
-
-Later targets:
-
+- ARM64 / AArch64
 - RISC-V 64
-- WASM32
+
+Executable machine-code targets should be enabled incrementally as instruction
+selection, register allocation, calling conventions, and object emission become
+real. WASM32 remains a later target.
 
 ## Phase 12: Build Tool
 
@@ -530,15 +530,15 @@ The runtime should stay small. Pine should not require a garbage collector.
 1. Array initializer literals — close the gap between documented examples and what the parser actually accepts.
 2. Assignment to complex lvalues (`arr[i] = x;`, `p.field = x;`) — currently a parse error, not just a semantic gap.
 3. Enum declarations — `enum` is already a reserved keyword with no parser support behind it.
-4. Struct literal initialization.
-5. Decide the fate of the `class` keyword.
-6. Source snippets in diagnostics.
+4. Add project manifests and module/package discovery.
+5. Decide and document the fate of the reserved `class` keyword.
+6. Add underlined spans, suggestions, and structured diagnostic output.
 
 ## Current Best Next Step
 
 The native backend now consumes the same flat Pine IR that `pine ir` dumps (`ir_lower_program` in `ir.c`), instead of independently walking the AST. Control-flow linearization (labels, jumps, break/continue targets, switch dispatch) now happens once, in the IR lowering pass; `native.c` only adds frame/layout concerns on top. `pine ir` and `pine native` on the same source now share label IDs, confirming they come from one lowering.
 
-The next best compiler feature is **array initializer literals** (`i32 values[4] = [1, 2, 3, 4];`).
+The next best compiler feature is **typed IR completion**: carry resolved value types through every load, operator, aggregate, and control-flow join.
 
 While exercising the new IR pipeline against real programs, a second, related gap surfaced: **assignment to anything other than a bare variable name is a parse error**, not just an unchecked semantic case. `arr[i] = 1;` and `point.x = 1;` both fail to parse today. `AST_ASSIGN_STMT` only carries a name, not an arbitrary lvalue expression. This should be scoped alongside array initializers, since both touch the same assignment-statement grammar.
 

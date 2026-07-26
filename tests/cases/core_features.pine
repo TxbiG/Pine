@@ -1,0 +1,31 @@
+enum Mode {
+    Idle,
+    Active = 3
+}
+
+struct Pair {
+    i32 left;
+    i32 right;
+}
+
+void touch() {
+    return;
+}
+
+i32 sum4(i32 values[4]) {
+    return values[0] + values[1] + values[2] + values[3];
+}
+
+i32 main() {
+    bool ready = true;
+    i32 values[4] = [1, 2, 3, 4];
+    Pair pair = Pair { left: 0, right: 2 };
+    Mode mode = Active;
+    values[1] = 5;
+    pair.left = sum4(values);
+    touch();
+    if (ready && pair.left == 13 && mode == Active) {
+        return 0;
+    }
+    return 1;
+}

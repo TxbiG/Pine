@@ -1,0 +1,13 @@
+i32 add_twice(i32 value, i32 amount) {
+    i32 first = value + amount;
+    i32 second = first + amount;
+    return second;
+}
+
+i32 main() {
+    i32 result = add_twice(3, 4);
+    if (result > 10) {
+        result = result - 1;
+    }
+    return result;
+}

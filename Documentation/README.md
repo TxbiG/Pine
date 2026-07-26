@@ -57,9 +57,11 @@ pine build <file>      # emit C and compile it with a C compiler
 pine run <file>        # build and run
 pine test <file>       # build and run as a test program
 pine ir <file>         # dump textual Pine IR
-pine native <file>     # emit debug-only native backend artifact
+pine targets           # list supported native debug targets
+pine native <file> [--target x86_64|aarch64|riscv64]
+                       # emit architecture-aware debug artifact
 ```
 
 ## Planned Work
 
-The next large area is native backend exploration. The C backend should remain useful and readable while native backend pieces are developed behind debug-focused commands.
+The next large area is instruction selection and ABI design for the native backend. The current debug artifact already carries x86-64, ARM64, or RV64 target/layout metadata. The C backend should remain useful and readable while executable native code develops behind debug-focused commands.

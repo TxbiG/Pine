@@ -101,7 +101,7 @@ static char *resolve_import_path(const char *base_dir, const char *module_path) 
     size_t module_length = strlen(module_path);
     char *path = malloc(base_length + 1 + module_length + 5 + 1);
     memcpy(path, base_dir, base_length);
-    path[base_length] = '\\';
+    path[base_length] = '/';
     for (size_t i = 0; i < module_length; i++) {
         path[base_length + 1 + i] = module_path[i] == '.' ? '\\' : module_path[i];
     }
@@ -175,6 +175,7 @@ static int load_module(const char *path, ASTNode *combined, PathList *loaded, Pa
 
     Parser parser;
     parser_init(&parser, source);
+    parser_set_source_path(&parser, path);
     ASTNode *root = parse_program(&parser);
     if (parser_error_count(&parser) > 0) {
         fprintf(stderr, "Pine stopped after %d parse error(s) in %s.\n", parser_error_count(&parser), path);
@@ -205,7 +206,11 @@ static void print_usage(void) {
     fprintf(stderr, "  pine run <file>             Build and run a Pine program\n");
     fprintf(stderr, "  pine test <file>            Build and run a Pine test program\n");
     fprintf(stderr, "  pine ir <file>              Dump lowered Pine IR\n");
-    fprintf(stderr, "  pine native <file>          Emit debug-only native backend artifact\n");
+    fprintf(stderr, "  pine native <file> [--target name]\n");
+    fprintf(stderr, "                              Emit architecture-aware debug native artifact\n");
+    fprintf(stderr, "  pine targets                List supported native debug targets\n");
+    fprintf(stderr, "  pine check <file>           Parse and type-check without emitting output\n");
+    fprintf(stderr, "  pine version                Print compiler version\n");
 }
 
 static ASTNode *compile_to_checked_ast(const char *input_path, int *warning_count) {
@@ -253,6 +258,17 @@ static int compile_to_c_file(const char *input_path, FILE *out) {
     return 1;
 }
 
+static int command_check(int argc, char **argv) {
+    if (argc < 3) {
+        print_usage();
+        return 1;
+    }
+    ASTNode *program = compile_to_checked_ast(argv[2], NULL);
+    if (!program) return 1;
+    ast_free(program);
+    return 0;
+}
+
 static int command_ir(int argc, char **argv) {
     if (argc < 3) {
         print_usage();
@@ -272,12 +288,43 @@ static int command_ir(int argc, char **argv) {
 }
 
 static int command_native(int argc, char **argv) {
-    if (argc < 3) {
+    const char *input_path = NULL;
+    NativeTarget target = NATIVE_TARGET_X86_64;
+
+    for (int i = 2; i < argc; i++) {
+        const char *argument = argv[i];
+        const char *target_name = NULL;
+        if (strcmp(argument, "--target") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Pine native error: --target requires a target name.\n");
+                return 1;
+            }
+            target_name = argv[i];
+        } else if (strncmp(argument, "--target=", 9) == 0) {
+            target_name = argument + 9;
+        } else if (argument[0] == '-') {
+            fprintf(stderr, "Pine native error: unknown option '%s'.\n", argument);
+            return 1;
+        } else if (!input_path) {
+            input_path = argument;
+        } else {
+            fprintf(stderr, "Pine native error: unexpected argument '%s'.\n", argument);
+            return 1;
+        }
+
+        if (target_name && !native_target_parse(target_name, &target)) {
+            fprintf(stderr, "Pine native error: unsupported target '%s'.\n", target_name);
+            fprintf(stderr, "Supported targets: x86_64, aarch64, riscv64.\n");
+            return 1;
+        }
+    }
+
+    if (!input_path) {
         print_usage();
         return 1;
     }
 
-    ASTNode *program = compile_to_checked_ast(argv[2], NULL);
+    ASTNode *program = compile_to_checked_ast(input_path, NULL);
     if (!program) {
         return 1;
     }
@@ -285,7 +332,7 @@ static int command_native(int argc, char **argv) {
     // The native debug backend consumes the same lowered IR as `pine ir`
     // instead of walking the AST a second time.
     IRModule *module = ir_lower_program(program);
-    native_emit_debug(module, stdout);
+    native_emit_debug(module, target, stdout);
     ir_free_module(module);
     ast_free(program);
     return 0;
@@ -341,7 +388,7 @@ static int write_c_output(const char *input_path, const char *c_path) {
 }
 
 static int build_executable(const char *input_path, const char *exe_path) {
-    char *c_path = replace_extension(input_path, ".c");
+    char *c_path = replace_extension(input_path, ".pine.c");
     if (!write_c_output(input_path, c_path)) {
         free(c_path);
         return 0;
@@ -432,11 +479,22 @@ int main(int argc, char **argv) {
     if (strcmp(argv[1], "test") == 0) {
         return command_run_or_test(argc, argv, 1);
     }
+    if (strcmp(argv[1], "check") == 0) {
+        return command_check(argc, argv);
+    }
+    if (strcmp(argv[1], "version") == 0) {
+        fprintf(stdout, "pine 0.1-dev\n");
+        return 0;
+    }
     if (strcmp(argv[1], "ir") == 0) {
         return command_ir(argc, argv);
     }
     if (strcmp(argv[1], "native") == 0) {
         return command_native(argc, argv);
+    }
+    if (strcmp(argv[1], "targets") == 0) {
+        native_list_targets(stdout);
+        return 0;
     }
     if (strcmp(argv[1], "transpile") == 0) {
         if (argc < 3) {

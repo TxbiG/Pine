@@ -1,5 +1,3 @@
-#pragma once
-
 struct Pair {
     i32 left;
     i64 right;

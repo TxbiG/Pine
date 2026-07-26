@@ -1,0 +1,3 @@
+void bad() {
+    return 1;
+}

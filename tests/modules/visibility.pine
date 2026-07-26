@@ -1,0 +1,7 @@
+i32 hidden_value() {
+    return 7;
+}
+
+pub i32 visible_value() {
+    return hidden_value();
+}

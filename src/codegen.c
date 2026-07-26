@@ -84,6 +84,19 @@ static void emit_slice_typedefs(FILE *out) {
     }
 }
 
+static void emit_slice_access_helpers(FILE *out) {
+    const char *types[] = {
+        "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64",
+        "bool", "char", "float", "double", NULL
+    };
+    for (int i = 0; types[i]; i++) {
+        fprintf(out, "static %s *pine_slice_%s_at(pine_slice_%s slice, int64_t index) {\n",
+                c_type(types[i]), types[i], types[i]);
+        fprintf(out, "    return &slice.data[pine_bounds_check(index, slice.length)];\n");
+        fprintf(out, "}\n\n");
+    }
+}
+
 // Writes four-space indentation for a nested C statement.
 static void emit_indent(FILE *out, int indent) {
     for (int i = 0; i < indent; i++) {
@@ -95,7 +108,7 @@ static void emit_indent(FILE *out, int indent) {
 static void emit_expr(ASTNode *node, FILE *out) {
     switch (node->type) {
         case AST_NUMBER:
-            fprintf(out, "%ld", node->number.value);
+            fprintf(out, "%lld", node->number.value);
             break;
         case AST_CHAR_LITERAL:
         case AST_STRING_LITERAL:
@@ -103,6 +116,27 @@ static void emit_expr(ASTNode *node, FILE *out) {
             break;
         case AST_NULL_LITERAL:
             fprintf(out, "NULL");
+            break;
+        case AST_BOOL_LITERAL:
+            fprintf(out, node->boolean.value ? "true" : "false");
+            break;
+        case AST_ARRAY_LITERAL:
+            fprintf(out, "{");
+            for (size_t i = 0; i < node->list.count; i++) {
+                if (i > 0) fprintf(out, ", ");
+                emit_expr(node->list.items[i], out);
+            }
+            fprintf(out, "}");
+            break;
+        case AST_STRUCT_LITERAL:
+            fprintf(out, "(%s){", node->struct_literal.type_name);
+            for (size_t i = 0; i < node->struct_literal.fields->list.count; i++) {
+                ASTNode *field = node->struct_literal.fields->list.items[i];
+                if (i > 0) fprintf(out, ", ");
+                fprintf(out, ".%s = ", field->field_init.name);
+                emit_expr(field->field_init.value, out);
+            }
+            fprintf(out, "}");
             break;
         case AST_IDENTIFIER:
             fprintf(out, "%s", node->identifier.name);
@@ -167,12 +201,11 @@ static void emit_expr(ASTNode *node, FILE *out) {
             break;
         case AST_INDEX_EXPR:
             if (node->index.checked_is_slice) {
+                fprintf(out, "(*pine_slice_%s_at(", node->index.checked_element_type);
                 emit_expr(node->index.object, out);
-                fprintf(out, ".data[pine_bounds_check((int64_t)(");
+                fprintf(out, ", (int64_t)(");
                 emit_expr(node->index.index, out);
-                fprintf(out, "), ");
-                emit_expr(node->index.object, out);
-                fprintf(out, ".length)]");
+                fprintf(out, ")))");
             } else {
                 emit_expr(node->index.object, out);
                 fprintf(out, "[");
@@ -220,7 +253,8 @@ static void emit_for_clause(ASTNode *node, FILE *out) {
             }
             break;
         case AST_ASSIGN_STMT:
-            fprintf(out, "%s = ", node->assign.name);
+            emit_expr(node->assign.target, out);
+            fprintf(out, " = ");
             emit_expr(node->assign.value, out);
             break;
         case AST_EXPR_STMT:
@@ -255,7 +289,8 @@ static void emit_stmt(ASTNode *node, FILE *out, int indent) {
             break;
         case AST_ASSIGN_STMT:
             emit_indent(out, indent);
-            fprintf(out, "%s = ", node->assign.name);
+            emit_expr(node->assign.target, out);
+            fprintf(out, " = ");
             emit_expr(node->assign.value, out);
             fprintf(out, ";\n");
             break;
@@ -266,8 +301,11 @@ static void emit_stmt(ASTNode *node, FILE *out, int indent) {
             break;
         case AST_RETURN_STMT:
             emit_indent(out, indent);
-            fprintf(out, "return ");
-            emit_expr(node->ret.value, out);
+            fprintf(out, "return");
+            if (node->ret.value) {
+                fprintf(out, " ");
+                emit_expr(node->ret.value, out);
+            }
             fprintf(out, ";\n");
             break;
         case AST_IF_STMT:
@@ -321,7 +359,7 @@ static void emit_stmt(ASTNode *node, FILE *out, int indent) {
                 if (case_node->case_stmt.is_default) {
                     fprintf(out, "default:\n");
                 } else {
-                    fprintf(out, "case %ld:\n", case_node->case_stmt.value);
+                    fprintf(out, "case %lld:\n", case_node->case_stmt.value);
                 }
                 emit_block(case_node->case_stmt.body, out, indent + 2);
             }
@@ -371,17 +409,40 @@ static void emit_params(ASTNode *params, FILE *out) {
         }
         emit_c_type(param->param.param_type, out);
         fprintf(out, " %s", param->param.name);
+        if (param->param.array_size > 0) {
+            fprintf(out, "[%zu]", param->param.array_size);
+        }
     }
+}
+
+static void emit_function_signature(ASTNode *node, FILE *out) {
+    emit_c_type(node->function.return_type, out);
+    fprintf(out, " %s(", node->function.name);
+    emit_params(node->function.params, out);
+    fprintf(out, ")");
+}
+
+static void emit_function_decl(ASTNode *node, FILE *out) {
+    emit_function_signature(node, out);
+    fprintf(out, ";\n");
 }
 
 // Emits a complete C function definition.
 static void emit_function(ASTNode *node, FILE *out) {
-    emit_c_type(node->function.return_type, out);
-    fprintf(out, " %s(", node->function.name);
-    emit_params(node->function.params, out);
-    fprintf(out, ") {\n");
+    emit_function_signature(node, out);
+    fprintf(out, " {\n");
     emit_block(node->function.body, out, 1);
     fprintf(out, "}\n\n");
+}
+
+static void emit_enum(ASTNode *node, FILE *out) {
+    fprintf(out, "typedef enum %s {\n", node->enum_decl.name);
+    for (size_t i = 0; i < node->enum_decl.values->list.count; i++) {
+        ASTNode *value = node->enum_decl.values->list.items[i];
+        fprintf(out, "    %s = %lld%s\n", value->enum_value.name, value->enum_value.value,
+                i + 1 < node->enum_decl.values->list.count ? "," : "");
+    }
+    fprintf(out, "} %s;\n\n", node->enum_decl.name);
 }
 
 // Emits a typedef-backed C struct for a Pine struct declaration.
@@ -429,13 +490,24 @@ void codegen_generate_c(ASTNode *root, FILE *out) {
     fprintf(out, "    }\n");
     fprintf(out, "    return (size_t)index;\n");
     fprintf(out, "}\n\n");
+    emit_slice_access_helpers(out);
 
     for (size_t i = 0; i < root->list.count; i++) {
         ASTNode *item = root->list.items[i];
-        if (item->type == AST_STRUCT_DECL) {
-            emit_struct(item, out);
+        if (item->type == AST_ENUM_DECL) emit_enum(item, out);
+    }
+    for (size_t i = 0; i < root->list.count; i++) {
+        ASTNode *item = root->list.items[i];
+        if (item->type == AST_STRUCT_DECL) emit_struct(item, out);
+    }
+
+    for (size_t i = 0; i < root->list.count; i++) {
+        ASTNode *item = root->list.items[i];
+        if (item->type == AST_FUNCTION) {
+            emit_function_decl(item, out);
         }
     }
+    fprintf(out, "\n");
 
     for (size_t i = 0; i < root->list.count; i++) {
         ASTNode *item = root->list.items[i];

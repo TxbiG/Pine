@@ -28,6 +28,8 @@ static Keyword keywords[] = {
     {"double", TOKEN_DOUBLE},
     {"void", TOKEN_VOID},
     {"const", TOKEN_CONST},
+    {"pub", TOKEN_PUB},
+    {"private", TOKEN_PRIVATE},
     {"static", TOKEN_STATIC},
     {"inline", TOKEN_INLINE},
     {"enum", TOKEN_ENUM},
@@ -36,6 +38,8 @@ static Keyword keywords[] = {
     {"union", TOKEN_UNION},
     {"import", TOKEN_IMPORT},
     {"null", TOKEN_NULL},
+    {"true", TOKEN_TRUE},
+    {"false", TOKEN_FALSE},
     {"if", TOKEN_IF},
     {"else", TOKEN_ELSE},
     {"while", TOKEN_WHILE},
@@ -111,15 +115,27 @@ static void skip_space_and_comments(Lexer *lexer) {
             continue;
         }
         if (c == '/' && peek_next(lexer) == '*') {
+            size_t start = lexer->pos;
+            int line = lexer->line;
+            int column = lexer->column;
+            int closed = 0;
             advance(lexer);
             advance(lexer);
             while (peek(lexer) != '\0') {
                 if (peek(lexer) == '*' && peek_next(lexer) == '/') {
                     advance(lexer);
                     advance(lexer);
+                    closed = 1;
                     break;
                 }
                 advance(lexer);
+            }
+            if (!closed) {
+                lexer->pending_error_pos = start;
+                lexer->pending_error_line = line;
+                lexer->pending_error_column = column;
+                lexer->has_pending_error = 1;
+                return;
             }
             continue;
         }
@@ -143,10 +159,24 @@ void lexer_init(Lexer *lexer, const char *source) {
     lexer->pos = 0;
     lexer->line = 1;
     lexer->column = 1;
+    lexer->pending_error_pos = 0;
+    lexer->pending_error_line = 0;
+    lexer->pending_error_column = 0;
+    lexer->has_pending_error = 0;
 }
 
 Token lexer_next_token(Lexer *lexer) {
     skip_space_and_comments(lexer);
+    if (lexer->has_pending_error) {
+        Token token;
+        token.type = TOKEN_ERROR;
+        token.lexeme = lexer->src + lexer->pending_error_pos;
+        token.length = lexer->pos - lexer->pending_error_pos;
+        token.line = lexer->pending_error_line;
+        token.column = lexer->pending_error_column;
+        lexer->has_pending_error = 0;
+        return token;
+    }
 
     int line = lexer->line;
     int column = lexer->column;
@@ -176,12 +206,16 @@ Token lexer_next_token(Lexer *lexer) {
         while (peek(lexer) != '\0' && peek(lexer) != '"') {
             if (peek(lexer) == '\\') {
                 advance(lexer);
+                if (peek(lexer) == '\0') {
+                    return make_token(lexer, TOKEN_ERROR, start, line, column);
+                }
             }
             advance(lexer);
         }
-        if (peek(lexer) == '"') {
-            advance(lexer);
+        if (peek(lexer) != '"') {
+            return make_token(lexer, TOKEN_ERROR, start, line, column);
         }
+        advance(lexer);
         return make_token(lexer, TOKEN_STRING, start, line, column);
     }
 
@@ -189,15 +223,19 @@ Token lexer_next_token(Lexer *lexer) {
         advance(lexer);
         if (peek(lexer) == '\\') {
             advance(lexer);
-            if (peek(lexer) != '\0') {
-                advance(lexer);
+            if (peek(lexer) == '\0') {
+                return make_token(lexer, TOKEN_ERROR, start, line, column);
             }
+            advance(lexer);
         } else if (peek(lexer) != '\0' && peek(lexer) != '\'') {
             advance(lexer);
+        } else {
+            return make_token(lexer, TOKEN_ERROR, start, line, column);
         }
-        if (peek(lexer) == '\'') {
-            advance(lexer);
+        if (peek(lexer) != '\'') {
+            return make_token(lexer, TOKEN_ERROR, start, line, column);
         }
+        advance(lexer);
         return make_token(lexer, TOKEN_CHAR_LITERAL, start, line, column);
     }
 

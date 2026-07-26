@@ -17,6 +17,12 @@ typedef enum {
     IR_NULL,                 // (no operands)
     IR_LOAD,                  // name = variable name
     IR_STORE,                  // name = variable name (pops preceding value)
+    IR_STORE_FIELD,            // name = field; pops object and value
+    IR_STORE_INDEX,            // value/flag = bounds metadata; pops object, index, value
+    IR_STORE_DEREF,            // pops pointer and value
+    IR_ARRAY,                  // extra = element count; pops elements and pushes one aggregate
+    IR_STRUCT_FIELD,           // name = field associated with preceding value
+    IR_STRUCT_BUILD,           // name = type, extra = field count
     IR_UNARY,                    // name = operator name (pops 1 operand)
     IR_BINARY,                    // name = operator name (pops 2 operands)
     IR_FIELD,                      // name = field name (pops 1 object)
@@ -26,9 +32,12 @@ typedef enum {
     IR_RETURN_VALUE,                     // pops the return value
     IR_RETURN,                            // (no operands)
     IR_DECL_LOCAL,                         // name = var name, type = var type, extra = array_size
+    IR_SCOPE_BEGIN,
+    IR_SCOPE_END,
     IR_LABEL,                                // name = label
     IR_JUMP,                                  // name = target label
     IR_JUMP_IF_FALSE,                          // name = target label (pops condition)
+    IR_JUMP_IF_TRUE,                           // name = target label (pops condition)
     IR_SWITCH_DISPATCH,                         // name = end label (pops switch value; case matching is by the following IR_CASE labels)
     IR_CASE,                                     // name = case label, value = case value, flag = is_default
     IR_UNSAFE_BEGIN,
@@ -42,14 +51,17 @@ typedef struct {
     IROpcode op;
     char *name;    // identifier / label / literal text / operator name / call name, or NULL
     char *type;     // Pine type text, used by IR_DECL_LOCAL only
-    long value;       // literal value / checked length / case value, meaning is opcode-specific
+    long long value;       // literal value / checked length / case value, meaning is opcode-specific
     size_t extra;      // call arg count / decl_local array size
     int flag;            // checked_is_slice / case is_default, meaning is opcode-specific
+    // Borrowed source node for IR_UNSUPPORTED; the AST must outlive the IR.
+    ASTNode *fallback_ast;
 } IRInstr;
 
 typedef struct {
     char *name;
     char *type;
+    size_t array_size;
 } IRParam;
 
 typedef struct {
@@ -96,5 +108,8 @@ IRModule *ir_lower_program(ASTNode *root);
 void ir_free_module(IRModule *module);
 // Prints the flat instruction-list form of a module (`pine ir`).
 void ir_dump_program(IRModule *module, FILE *out);
+
+// Describes the shared operand-stack convention used for expressions.
+void ir_instr_stack_effect(const IRInstr *instr, size_t *pops, size_t *pushes);
 
 #endif

@@ -1,5 +1,3 @@
-#pragma once
-
 i32 add(i32 a, i32 b) {
     i32 total = a + b;
     return total;

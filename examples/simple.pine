@@ -1,5 +1,3 @@
-#pragma once
-
 struct Vec2 {
     i32 x;
     i32 y;

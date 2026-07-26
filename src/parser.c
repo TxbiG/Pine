@@ -39,12 +39,28 @@ static void token_description(Token token, char *buffer, size_t size) {
     snprintf(buffer, size, "'%.*s'", (int)length, token.lexeme);
 }
 
+static void print_parse_snippet(Parser *parser, int line, int column) {
+    const char *start = parser->source;
+    for (int current = 1; current < line && *start; current++) {
+        const char *newline = strchr(start, '\n');
+        if (!newline) return;
+        start = newline + 1;
+    }
+    const char *end = strchr(start, '\n');
+    if (!end) end = start + strlen(start);
+    fprintf(stderr, "  %.*s\n  ", (int)(end - start), start);
+    for (int i = 1; i < column; i++) fputc(start[i - 1] == '\t' ? '\t' : ' ', stderr);
+    fprintf(stderr, "^\n");
+}
+
 // Reports a parse error and lets the parser continue where it can.
 static void parse_error(Parser *parser, const char *message) {
     char found[48];
     token_description(parser->current, found, sizeof(found));
-    fprintf(stderr, "Pine parse error at line %d, column %d: %s; found %s\n",
+    fprintf(stderr, "%s:%d:%d: Pine parse error: %s; found %s\n",
+            parser->source_path ? parser->source_path : "<input>",
             parser->current.line, parser->current.column, message, found);
+    print_parse_snippet(parser, parser->current.line, parser->current.column);
     parser->errors++;
 }
 
@@ -57,7 +73,10 @@ static void synchronize(Parser *parser) {
 
         switch (parser->current.type) {
             case TOKEN_CONST:
+            case TOKEN_PUB:
+            case TOKEN_PRIVATE:
             case TOKEN_STRUCT:
+            case TOKEN_ENUM:
             case TOKEN_IMPORT:
             case TOKEN_IF:
             case TOKEN_WHILE:
@@ -99,7 +118,10 @@ static char *token_text(Token token) {
 }
 
 // Tags a node with the source position of the token that introduced it.
+static const char *active_source_path = "<input>";
+
 static ASTNode *with_location(ASTNode *node, Token token) {
+    ast_set_source_file(node, active_source_path);
     return ast_set_location(node, token.line, token.column);
 }
 
@@ -204,7 +226,14 @@ void parser_init(Parser *parser, const char *source) {
     lexer_init(&parser->lexer, source);
     parser->previous = (Token){0};
     parser->current = lexer_next_token(&parser->lexer);
+    parser->source = source;
+    parser->source_path = "<input>";
     parser->errors = 0;
+}
+
+void parser_set_source_path(Parser *parser, const char *source_path) {
+    parser->source_path = source_path ? source_path : "<input>";
+    active_source_path = parser->source_path;
 }
 
 int parser_error_count(Parser *parser) {
@@ -235,7 +264,7 @@ static ASTNode *parse_primary(Parser *parser) {
     if (check(parser, TOKEN_NUMBER)) {
         Token token = parser->current;
         char *text = token_text(token);
-        long value = strtol(text, NULL, 10);
+        long long value = strtoll(text, NULL, 10);
         free(text);
         advance(parser);
         expr = with_location(ast_make_number(value), token);
@@ -255,6 +284,24 @@ static ASTNode *parse_primary(Parser *parser) {
         Token token = parser->current;
         advance(parser);
         expr = with_location(ast_make_null_literal(), token);
+    } else if (check(parser, TOKEN_TRUE) || check(parser, TOKEN_FALSE)) {
+        Token token = parser->current;
+        int value = check(parser, TOKEN_TRUE);
+        advance(parser);
+        expr = with_location(ast_make_bool_literal(value), token);
+    } else if (check(parser, TOKEN_LBRACKET)) {
+        Token token = parser->current;
+        advance(parser);
+        ASTNode *elements = ast_make_block();
+        if (!check(parser, TOKEN_RBRACKET)) {
+            do {
+                ast_list_append(elements, parse_expression(parser));
+                if (!check(parser, TOKEN_COMMA)) break;
+                advance(parser);
+            } while (!check(parser, TOKEN_RBRACKET));
+        }
+        consume(parser, TOKEN_RBRACKET, "expected ']' after array initializer");
+        expr = with_location(ast_make_array_literal(elements), token);
     } else if (check(parser, TOKEN_IDENT)) {
         Token ident_token = parser->current;
         char *name = token_text(ident_token);
@@ -265,11 +312,24 @@ static ASTNode *parse_primary(Parser *parser) {
             ASTNode *args = parse_arg_list(parser);
             consume(parser, TOKEN_RPAREN, "expected ')' after function call arguments");
             expr = with_location(ast_make_call(name, args), ident_token);
-            free(name);
+        } else if (check(parser, TOKEN_LBRACE)) {
+            advance(parser);
+            ASTNode *fields = ast_make_block();
+            while (!check(parser, TOKEN_RBRACE) && !check(parser, TOKEN_EOF)) {
+                Token field_token = consume(parser, TOKEN_IDENT, "expected struct literal field name");
+                char *field_name = token_text(field_token);
+                consume(parser, TOKEN_COLON, "expected ':' after struct literal field name");
+                ast_list_append(fields, with_location(ast_make_field_init(field_name, parse_expression(parser)), field_token));
+                free(field_name);
+                if (!check(parser, TOKEN_COMMA)) break;
+                advance(parser);
+            }
+            consume(parser, TOKEN_RBRACE, "expected '}' after struct literal");
+            expr = with_location(ast_make_struct_literal(name, fields), ident_token);
         } else {
             expr = with_location(ast_make_identifier(name), ident_token);
-            free(name);
         }
+        free(name);
     } else if (check(parser, TOKEN_LPAREN)) {
         advance(parser);
         expr = parse_expression(parser);
@@ -460,7 +520,7 @@ static ASTNode *parse_var_decl(Parser *parser, char *var_type, int is_const) {
         advance(parser);
         Token size_token = consume(parser, TOKEN_NUMBER, "expected array size");
         char *size_text = token_text(size_token);
-        long parsed_size = strtol(size_text, NULL, 10);
+        long long parsed_size = strtoll(size_text, NULL, 10);
         free(size_text);
 
         if (parsed_size <= 0) {
@@ -473,19 +533,43 @@ static ASTNode *parse_var_decl(Parser *parser, char *var_type, int is_const) {
     }
 
     if (check(parser, TOKEN_ASSIGN)) {
-        if (array_size > 0) {
-            parse_error(parser, "array initializers are not implemented yet");
-            synchronize(parser);
-            value = with_location(ast_make_number(0), parser->current);
-            goto finish_decl;
-        }
         advance(parser);
         value = parse_expression(parser);
     }
 
-finish_decl:
     consume(parser, TOKEN_SEMI, "expected ';' after variable declaration");
     ASTNode *decl = with_location(ast_make_var_decl(var_type, name, array_size, is_const, value), name_token);
+    free(name);
+    return decl;
+}
+
+// Parses a top-level enum declaration with optional explicit integer values.
+static ASTNode *parse_enum_decl(Parser *parser) {
+    Token enum_token = consume(parser, TOKEN_ENUM, "expected 'enum'");
+    Token name_token = consume(parser, TOKEN_IDENT, "expected enum name");
+    char *name = token_text(name_token);
+    ASTNode *values = ast_make_block();
+    long next_value = 0;
+    consume(parser, TOKEN_LBRACE, "expected '{' after enum name");
+    while (!check(parser, TOKEN_RBRACE) && !check(parser, TOKEN_EOF)) {
+        Token value_token = consume(parser, TOKEN_IDENT, "expected enum value name");
+        char *value_name = token_text(value_token);
+        long long value = next_value;
+        if (check(parser, TOKEN_ASSIGN)) {
+            advance(parser);
+            Token number = consume(parser, TOKEN_NUMBER, "expected integer enum value");
+            char *number_text = token_text(number);
+            value = strtoll(number_text, NULL, 10);
+            free(number_text);
+        }
+        ast_list_append(values, with_location(ast_make_enum_value(value_name, value), value_token));
+        free(value_name);
+        next_value = value + 1;
+        if (!check(parser, TOKEN_COMMA)) break;
+        advance(parser);
+    }
+    consume(parser, TOKEN_RBRACE, "expected '}' after enum values");
+    ASTNode *decl = with_location(ast_make_enum_decl(name, values), enum_token);
     free(name);
     return decl;
 }
@@ -517,8 +601,11 @@ static ASTNode *parse_struct_decl(Parser *parser) {
 // Parses a return statement.
 static ASTNode *parse_return(Parser *parser) {
     Token return_token = consume(parser, TOKEN_RETURN, "expected 'return'");
-    ASTNode *value = parse_expression(parser);
-    consume(parser, TOKEN_SEMI, "expected ';' after return value");
+    ASTNode *value = NULL;
+    if (!check(parser, TOKEN_SEMI)) {
+        value = parse_expression(parser);
+    }
+    consume(parser, TOKEN_SEMI, "expected ';' after return");
     return with_location(ast_make_return(value), return_token);
 }
 
@@ -535,18 +622,17 @@ static ASTNode *parse_while(Parser *parser) {
 static ASTNode *parse_assignment_or_expr(Parser *parser, const char *message) {
     ASTNode *expr = parse_expression(parser);
 
-    if (expr->type == AST_IDENTIFIER && check(parser, TOKEN_ASSIGN)) {
-        char *name = copy_string(expr->identifier.name);
-        ast_free(expr);
+    if (check(parser, TOKEN_ASSIGN)) {
+        int valid_target = expr->type == AST_IDENTIFIER ||
+                           expr->type == AST_FIELD_EXPR ||
+                           expr->type == AST_INDEX_EXPR ||
+                           (expr->type == AST_UNARY_EXPR && expr->unary.op == TOKEN_STAR);
+        if (!valid_target) {
+            parse_error(parser, message);
+        }
         advance(parser);
         ASTNode *value = parse_expression(parser);
-        ASTNode *assign = ast_set_location(ast_make_assign(name, value), expr->line, expr->column);
-        free(name);
-        return assign;
-    }
-
-    if (check(parser, TOKEN_ASSIGN)) {
-        parse_error(parser, message);
+        return ast_set_location(ast_make_assign(expr, value), expr->line, expr->column);
     }
 
     return ast_set_location(ast_make_expr_stmt(expr), expr->line, expr->column);
@@ -596,7 +682,7 @@ static ASTNode *parse_switch(Parser *parser) {
     ASTNode *cases = ast_make_block();
     while (!check(parser, TOKEN_RBRACE) && !check(parser, TOKEN_EOF)) {
         int is_default = 0;
-        long value = 0;
+        long long value = 0;
         Token label_token = parser->current;
 
         if (check(parser, TOKEN_CASE)) {
@@ -604,7 +690,7 @@ static ASTNode *parse_switch(Parser *parser) {
             Token value_token = consume(parser, TOKEN_NUMBER, "expected number after case");
             label_token = value_token;
             char *text = token_text(value_token);
-            value = strtol(text, NULL, 10);
+            value = strtoll(text, NULL, 10);
             free(text);
         } else if (check(parser, TOKEN_DEFAULT)) {
             is_default = 1;
@@ -732,7 +818,21 @@ static ASTNode *parse_params(Parser *parser) {
 
             Token name_token = consume(parser, TOKEN_IDENT, "expected parameter name");
             char *name = token_text(name_token);
-            ast_list_append(params, with_location(ast_make_param(type, name), name_token));
+            size_t array_size = 0;
+            if (check(parser, TOKEN_LBRACKET)) {
+                advance(parser);
+                Token size_token = consume(parser, TOKEN_NUMBER, "expected parameter array size");
+                char *size_text = token_text(size_token);
+                long long parsed_size = strtoll(size_text, NULL, 10);
+                free(size_text);
+                if (parsed_size <= 0) {
+                    parse_error(parser, "parameter array size must be greater than zero");
+                    parsed_size = 1;
+                }
+                array_size = (size_t)parsed_size;
+                consume(parser, TOKEN_RBRACKET, "expected ']' after parameter array size");
+            }
+            ast_list_append(params, with_location(ast_make_param(type, name, array_size), name_token));
 
             free(type);
             free(name);
@@ -810,7 +910,7 @@ static ASTNode *parse_global_or_function(Parser *parser) {
         advance(parser);
         Token size_token = consume(parser, TOKEN_NUMBER, "expected array size");
         char *size_text = token_text(size_token);
-        long parsed_size = strtol(size_text, NULL, 10);
+        long long parsed_size = strtoll(size_text, NULL, 10);
         free(size_text);
 
         if (parsed_size <= 0) {
@@ -823,17 +923,10 @@ static ASTNode *parse_global_or_function(Parser *parser) {
     }
 
     if (check(parser, TOKEN_ASSIGN)) {
-        if (array_size > 0) {
-            parse_error(parser, "array initializers are not implemented yet");
-            synchronize(parser);
-            value = with_location(ast_make_number(0), parser->current);
-            goto finish_global;
-        }
         advance(parser);
         value = parse_expression(parser);
     }
 
-finish_global:
     consume(parser, TOKEN_SEMI, "expected ';' after global declaration");
     ASTNode *decl = with_location(ast_make_var_decl(type_text, name_text, array_size, is_const, value), name);
     free(type_text);
@@ -846,29 +939,38 @@ ASTNode *parse_program(Parser *parser) {
 
     while (!check(parser, TOKEN_EOF)) {
         if (check(parser, TOKEN_ERROR)) {
-            parse_error(parser, "unexpected character");
+            parse_error(parser, "unexpected or unterminated token");
             advance(parser);
             synchronize(parser);
             continue;
         }
-        if (check(parser, TOKEN_STRUCT)) {
-            ast_list_append(program, parse_struct_decl(parser));
-            continue;
+
+        int is_public = 0;
+        if (check(parser, TOKEN_PUB) || check(parser, TOKEN_PRIVATE)) {
+            is_public = check(parser, TOKEN_PUB);
+            advance(parser);
         }
-        if (check(parser, TOKEN_IMPORT)) {
-            ast_list_append(program, parse_import(parser));
-            continue;
-        }
-        if (!check(parser, TOKEN_CONST) && !is_type_token(parser->current.type) && !check(parser, TOKEN_IDENT)) {
+
+        ASTNode *decl = NULL;
+        if (check(parser, TOKEN_ENUM)) {
+            decl = parse_enum_decl(parser);
+        } else if (check(parser, TOKEN_STRUCT)) {
+            decl = parse_struct_decl(parser);
+        } else if (check(parser, TOKEN_IMPORT)) {
+            if (is_public) parse_error(parser, "imports cannot be public");
+            decl = parse_import(parser);
+        } else if (check(parser, TOKEN_CONST) || is_type_token(parser->current.type) || check(parser, TOKEN_IDENT)) {
+            decl = parse_global_or_function(parser);
+        } else {
             parse_error(parser, "expected declaration");
             advance(parser);
             synchronize(parser);
             continue;
         }
-        ast_list_append(program, parse_global_or_function(parser));
-        if (parser->errors > 0) {
-            synchronize(parser);
-        }
+
+        ast_set_public(decl, is_public);
+        ast_list_append(program, decl);
+        if (parser->errors > 0) synchronize(parser);
     }
 
     return program;

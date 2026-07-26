@@ -6,8 +6,11 @@
 typedef enum {
     AST_PROGRAM,
     AST_IMPORT_DECL,
+    AST_ENUM_DECL,
+    AST_ENUM_VALUE,
     AST_STRUCT_DECL,
     AST_FIELD_DECL,
+    AST_FIELD_INIT,
     AST_FUNCTION,
     AST_PARAM,
     AST_BLOCK,
@@ -27,6 +30,9 @@ typedef enum {
     AST_CHAR_LITERAL,
     AST_STRING_LITERAL,
     AST_NULL_LITERAL,
+    AST_BOOL_LITERAL,
+    AST_ARRAY_LITERAL,
+    AST_STRUCT_LITERAL,
     AST_IDENTIFIER,
     AST_UNARY_EXPR,
     AST_BINARY_EXPR,
@@ -45,6 +51,8 @@ struct ASTNode {
     ASTNodeType type;
     int line;
     int column;
+    char *source_file;
+    int is_public;
     union {
         struct {
             ASTNode **items;
@@ -55,12 +63,24 @@ struct ASTNode {
         } import_decl;
         struct {
             char *name;
+            ASTNode *values;
+        } enum_decl;
+        struct {
+            char *name;
+            long long value;
+        } enum_value;
+        struct {
+            char *name;
             ASTNode *fields;
         } struct_decl;
         struct {
             char *field_type;
             char *name;
         } field_decl;
+        struct {
+            char *name;
+            ASTNode *value;
+        } field_init;
         struct {
             char *return_type;
             char *name;
@@ -70,6 +90,7 @@ struct ASTNode {
         struct {
             char *param_type;
             char *name;
+            size_t array_size;
         } param;
         struct {
             char *var_type;
@@ -79,7 +100,7 @@ struct ASTNode {
             ASTNode *value;
         } var_decl;
         struct {
-            char *name;
+            ASTNode *target;
             ASTNode *value;
         } assign;
         struct {
@@ -108,7 +129,7 @@ struct ASTNode {
             ASTNode *cases;
         } switch_stmt;
         struct {
-            long value;
+            long long value;
             int is_default;
             ASTNode *body;
         } case_stmt;
@@ -116,11 +137,18 @@ struct ASTNode {
             ASTNode *body;
         } unsafe_block;
         struct {
-            long value;
+            long long value;
         } number;
+        struct {
+            int value;
+        } boolean;
         struct {
             char *text;
         } literal;
+        struct {
+            char *type_name;
+            ASTNode *fields;
+        } struct_literal;
         struct {
             char *name;
         } identifier;
@@ -142,6 +170,7 @@ struct ASTNode {
             ASTNode *index;
             size_t checked_length;
             int checked_is_slice;
+            char *checked_element_type;
         } index;
         struct {
             char *name;
@@ -154,20 +183,24 @@ struct ASTNode {
 ASTNode *ast_make_program(void);
 // Creates a top-level import declaration for a dotted module path.
 ASTNode *ast_make_import_decl(const char *path);
+ASTNode *ast_make_enum_decl(const char *name, ASTNode *values);
+ASTNode *ast_make_enum_value(const char *name, long long value);
 // Creates a generic list/block node used for statement lists, params, and cases.
 ASTNode *ast_make_block(void);
 // Creates a top-level struct declaration with a list of field declarations.
 ASTNode *ast_make_struct_decl(const char *name, ASTNode *fields);
 // Creates one field entry inside a struct declaration.
 ASTNode *ast_make_field_decl(const char *field_type, const char *name);
+ASTNode *ast_make_field_init(const char *name, ASTNode *value);
+ASTNode *ast_make_struct_literal(const char *type_name, ASTNode *fields);
 // Creates a function declaration with params and a body block.
 ASTNode *ast_make_function(const char *return_type, const char *name, ASTNode *params, ASTNode *body);
 // Creates a function parameter declaration.
-ASTNode *ast_make_param(const char *param_type, const char *name);
+ASTNode *ast_make_param(const char *param_type, const char *name, size_t array_size);
 // Creates a local or global variable declaration, optionally const or fixed-array.
 ASTNode *ast_make_var_decl(const char *var_type, const char *name, size_t array_size, int is_const, ASTNode *value);
 // Creates an assignment statement targeting a named variable.
-ASTNode *ast_make_assign(const char *name, ASTNode *value);
+ASTNode *ast_make_assign(ASTNode *target, ASTNode *value);
 // Wraps an expression so it can appear as a statement.
 ASTNode *ast_make_expr_stmt(ASTNode *expr);
 // Creates a return statement.
@@ -181,18 +214,20 @@ ASTNode *ast_make_for(ASTNode *init, ASTNode *condition, ASTNode *step, ASTNode 
 // Creates a switch statement with a list of case/default nodes.
 ASTNode *ast_make_switch(ASTNode *expr, ASTNode *cases);
 // Creates a switch case or default block; `is_default` selects default.
-ASTNode *ast_make_case(long value, int is_default, ASTNode *body);
+ASTNode *ast_make_case(long long value, int is_default, ASTNode *body);
 // Creates loop/switch control flow statements.
 ASTNode *ast_make_break(void);
 ASTNode *ast_make_continue(void);
 // Creates an unsafe block node, used by semantic checks for pointer dereference.
 ASTNode *ast_make_unsafe(ASTNode *body);
 // Creates literal expression nodes.
-ASTNode *ast_make_number(long value);
+ASTNode *ast_make_number(long long value);
 ASTNode *ast_make_char_literal(const char *text);
 ASTNode *ast_make_string_literal(const char *text);
 // Creates a null literal expression.
 ASTNode *ast_make_null_literal(void);
+ASTNode *ast_make_bool_literal(int value);
+ASTNode *ast_make_array_literal(ASTNode *elements);
 // Creates a name reference expression.
 ASTNode *ast_make_identifier(const char *name);
 // Creates unary and binary operator expressions. Operator values are TokenType ints.
@@ -205,6 +240,8 @@ ASTNode *ast_make_index_expr(ASTNode *object, ASTNode *index);
 ASTNode *ast_make_call(const char *name, ASTNode *args);
 // Attaches source coordinates to a node and returns the same node.
 ASTNode *ast_set_location(ASTNode *node, int line, int column);
+ASTNode *ast_set_source_file(ASTNode *node, const char *source_file);
+ASTNode *ast_set_public(ASTNode *node, int is_public);
 // Appends an item to any AST list/block node.
 void ast_list_append(ASTNode *list, ASTNode *item);
 // Recursively releases an AST node and all owned children/strings.

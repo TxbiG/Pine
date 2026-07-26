@@ -1,6 +1,59 @@
 #include "native.h"
 
+#include <stdlib.h>
 #include <string.h>
+
+typedef struct {
+    NativeTarget target;
+    const char *name;
+    const char *triple;
+    size_t pointer_size;
+    size_t pointer_align;
+    size_t stack_align;
+    const char *endianness;
+    const char *aliases;
+} NativeTargetInfo;
+
+static const NativeTargetInfo native_targets[] = {
+    {NATIVE_TARGET_X86_64, "x86_64", "x86_64-unknown-none", 8, 8, 16, "little", "x64, amd64"},
+    {NATIVE_TARGET_AARCH64, "aarch64", "aarch64-unknown-none", 8, 8, 16, "little", "arm64"},
+    {NATIVE_TARGET_RISCV64, "riscv64", "riscv64-unknown-none", 8, 8, 16, "little", "rv64"}
+};
+
+static const NativeTargetInfo *native_target_info(NativeTarget target) {
+    for (size_t i = 0; i < sizeof(native_targets) / sizeof(native_targets[0]); i++) {
+        if (native_targets[i].target == target) return &native_targets[i];
+    }
+    return &native_targets[0];
+}
+
+int native_target_parse(const char *name, NativeTarget *target) {
+    if (!name || !target) return 0;
+    if (strcmp(name, "x86_64") == 0 || strcmp(name, "x64") == 0 || strcmp(name, "amd64") == 0) {
+        *target = NATIVE_TARGET_X86_64;
+        return 1;
+    }
+    if (strcmp(name, "aarch64") == 0 || strcmp(name, "arm64") == 0) {
+        *target = NATIVE_TARGET_AARCH64;
+        return 1;
+    }
+    if (strcmp(name, "riscv64") == 0 || strcmp(name, "rv64") == 0) {
+        *target = NATIVE_TARGET_RISCV64;
+        return 1;
+    }
+    return 0;
+}
+
+const char *native_target_name(NativeTarget target) {
+    return native_target_info(target)->name;
+}
+
+void native_list_targets(FILE *out) {
+    for (size_t i = 0; i < sizeof(native_targets) / sizeof(native_targets[0]); i++) {
+        fprintf(out, "%s\t%s\taliases: %s\n",
+                native_targets[i].name, native_targets[i].triple, native_targets[i].aliases);
+    }
+}
 
 // This is not machine code yet. It is the first native-backend-shaped artifact.
 // The target is a tiny stack-machine text format used to design lowering.
@@ -17,10 +70,18 @@ typedef struct {
     size_t sizes[256];
     size_t aligns[256];
     size_t offsets[256];
+    int depths[256];
+    int active[256];
     int count;
+    int scope_depth;
     size_t frame_size;
     size_t frame_align;
+    size_t stack_depth;
+    size_t max_stack_depth;
+    const NativeTargetInfo *target;
 } NativeFrame;
+
+static void native_emit_ast_fallback(const ASTNode *node, FILE *out, int indent);
 
 // Writes indentation for nested native debug blocks.
 static void native_indent(FILE *out, int indent) {
@@ -44,9 +105,9 @@ static size_t native_align_to(size_t value, size_t align) {
 }
 
 // Assigns debug size/alignment for primitive and pointer-like Pine types.
-static NativeLayout native_type_layout(const char *type) {
+static NativeLayout native_type_layout(const char *type, const NativeTargetInfo *target) {
     if (type == NULL) {
-        return (NativeLayout){8, 8};
+        return (NativeLayout){target->pointer_size, target->pointer_align};
     }
 
     if (strcmp(type, "void") == 0) return (NativeLayout){0, 1};
@@ -58,19 +119,22 @@ static NativeLayout native_type_layout(const char *type) {
     if (strcmp(type, "float") == 0 || strcmp(type, "f32") == 0) return (NativeLayout){4, 4};
     if (strcmp(type, "u64") == 0 || strcmp(type, "i64") == 0) return (NativeLayout){8, 8};
     if (strcmp(type, "double") == 0 || strcmp(type, "f64") == 0) return (NativeLayout){8, 8};
-    if (strcmp(type, "string") == 0) return (NativeLayout){16, 8};
+    if (strcmp(type, "string") == 0) return (NativeLayout){target->pointer_size * 2, target->pointer_align};
 
     size_t length = strlen(type);
-    if (length > 0 && type[length - 1] == '*') return (NativeLayout){8, 8};
-    if (length > 0 && type[length - 1] == '?') return (NativeLayout){8, 8};
-    if (length > 1 && type[0] == '[' && type[1] == ']') return (NativeLayout){16, 8};
+    if (length > 0 && type[length - 1] == '*') return (NativeLayout){target->pointer_size, target->pointer_align};
+    if (length > 0 && type[length - 1] == '?') return (NativeLayout){target->pointer_size, target->pointer_align};
+    if (length > 1 && type[0] == '[' && type[1] == ']') {
+        return (NativeLayout){target->pointer_size * 2, target->pointer_align};
+    }
 
-    return (NativeLayout){8, 8};
+    return (NativeLayout){target->pointer_size, target->pointer_align};
 }
 
 // Applies fixed-array size expansion to a base type layout.
-static NativeLayout native_slot_layout(const char *type, size_t array_size) {
-    NativeLayout layout = native_type_layout(type);
+static NativeLayout native_slot_layout(const char *type, size_t array_size,
+                                       const NativeTargetInfo *target) {
+    NativeLayout layout = native_type_layout(type, target);
     if (array_size > 0) {
         layout.size *= array_size;
     }
@@ -80,7 +144,7 @@ static NativeLayout native_slot_layout(const char *type, size_t array_size) {
 // Finds a parameter or local slot in the current function frame.
 static int native_find_slot(NativeFrame *frame, const char *name) {
     for (int i = frame->count - 1; i >= 0; i--) {
-        if (strcmp(frame->names[i], name) == 0) {
+        if (frame->active[i] && strcmp(frame->names[i], name) == 0) {
             return i;
         }
     }
@@ -90,23 +154,20 @@ static int native_find_slot(NativeFrame *frame, const char *name) {
 
 // Adds a parameter or local slot to the current function frame.
 static int native_add_slot(NativeFrame *frame, const char *name, const char *type, size_t array_size) {
-    int existing = native_find_slot(frame, name);
-    if (existing >= 0) {
-        return existing;
-    }
-
     if (frame->count >= 256) {
         return -1;
     }
 
     int slot = frame->count;
-    NativeLayout layout = native_slot_layout(type, array_size);
+    NativeLayout layout = native_slot_layout(type, array_size, frame->target);
     size_t offset = native_align_to(frame->frame_size, layout.align);
     frame->names[slot] = name;
     frame->types[slot] = type;
     frame->sizes[slot] = layout.size;
     frame->aligns[slot] = layout.align;
     frame->offsets[slot] = offset;
+    frame->depths[slot] = frame->scope_depth;
+    frame->active[slot] = 1;
     frame->count++;
     frame->frame_size = offset + layout.size;
     if (layout.align > frame->frame_align) {
@@ -125,12 +186,12 @@ static void native_emit_frame_slot(NativeFrame *frame, FILE *out, int indent, co
 }
 
 // Emits debug layout for one struct declaration.
-static void native_emit_struct_layout(IRStruct *s, FILE *out) {
+static void native_emit_struct_layout(IRStruct *s, const NativeTargetInfo *target, FILE *out) {
     size_t offset = 0;
     size_t max_align = 1;
 
     for (size_t i = 0; i < s->field_count; i++) {
-        NativeLayout layout = native_type_layout(s->fields[i].field_type);
+        NativeLayout layout = native_type_layout(s->fields[i].field_type, target);
         offset = native_align_to(offset, layout.align);
         offset += layout.size;
         if (layout.align > max_align) {
@@ -143,7 +204,7 @@ static void native_emit_struct_layout(IRStruct *s, FILE *out) {
 
     offset = 0;
     for (size_t i = 0; i < s->field_count; i++) {
-        NativeLayout layout = native_type_layout(s->fields[i].field_type);
+        NativeLayout layout = native_type_layout(s->fields[i].field_type, target);
         offset = native_align_to(offset, layout.align);
         fprintf(out, "  FIELD %s %s offset=%zu size=%zu align=%zu\n",
                 s->fields[i].field_type, s->fields[i].name, offset, layout.size, layout.align);
@@ -153,6 +214,9 @@ static void native_emit_struct_layout(IRStruct *s, FILE *out) {
 
 // Converts an IR operator name into a debug native opcode.
 static const char *native_op_name(const char *ir_op) {
+    if (strcmp(ir_op, "neg") == 0) return "NEG";
+    if (strcmp(ir_op, "address_of") == 0) return "ADDRESS_OF";
+    if (strcmp(ir_op, "deref") == 0) return "DEREF";
     if (strcmp(ir_op, "add") == 0) return "ADD";
     if (strcmp(ir_op, "sub") == 0) return "SUB";
     if (strcmp(ir_op, "mul") == 0) return "MUL";
@@ -183,7 +247,7 @@ static void native_emit_instr(NativeFrame *frame, const IRInstr *instr, FILE *ou
     switch (instr->op) {
         case IR_CONST:
             native_indent(out, indent);
-            fprintf(out, "PUSH_I64 %ld\n", instr->value);
+            fprintf(out, "PUSH_I64 %lld\n", instr->value);
             break;
         case IR_LITERAL:
             native_indent(out, indent);
@@ -213,6 +277,32 @@ static void native_emit_instr(NativeFrame *frame, const IRInstr *instr, FILE *ou
             }
             break;
         }
+        case IR_STORE_FIELD:
+            native_indent(out, indent);
+            fprintf(out, "STORE_FIELD %s\n", instr->name);
+            break;
+        case IR_STORE_INDEX:
+            native_indent(out, indent);
+            if (instr->flag) fprintf(out, "STORE_INDEX_BOUNDS_SLICE\n");
+            else if (instr->value > 0) fprintf(out, "STORE_INDEX_BOUNDS %lld\n", instr->value);
+            else fprintf(out, "STORE_INDEX\n");
+            break;
+        case IR_STORE_DEREF:
+            native_indent(out, indent);
+            fprintf(out, "STORE_DEREF\n");
+            break;
+        case IR_ARRAY:
+            native_indent(out, indent);
+            fprintf(out, "BUILD_ARRAY count=%zu\n", instr->extra);
+            break;
+        case IR_STRUCT_FIELD:
+            native_indent(out, indent);
+            fprintf(out, "STRUCT_FIELD %s\n", instr->name);
+            break;
+        case IR_STRUCT_BUILD:
+            native_indent(out, indent);
+            fprintf(out, "BUILD_STRUCT %s count=%zu\n", instr->name, instr->extra);
+            break;
         case IR_UNARY:
         case IR_BINARY:
             native_indent(out, indent);
@@ -227,18 +317,21 @@ static void native_emit_instr(NativeFrame *frame, const IRInstr *instr, FILE *ou
             if (instr->flag) {
                 fprintf(out, "INDEX_BOUNDS_SLICE\n");
             } else if (instr->value > 0) {
-                fprintf(out, "INDEX_BOUNDS %ld\n", instr->value);
+                fprintf(out, "INDEX_BOUNDS %lld\n", instr->value);
             } else {
                 fprintf(out, "INDEX\n");
             }
             break;
         case IR_CALL:
             native_indent(out, indent);
-            fprintf(out, "CALL %s argc=%zu returns=1\n", instr->name, instr->extra);
+            fprintf(out, "CALL %s argc=%zu returns=%d\n", instr->name, instr->extra,
+                    (!instr->type || strcmp(instr->type, "void") != 0) ? 1 : 0);
             break;
         case IR_POP:
-            native_indent(out, indent);
-            fprintf(out, "POP\n");
+            if (!instr->flag) {
+                native_indent(out, indent);
+                fprintf(out, "POP\n");
+            }
             break;
         case IR_RETURN_VALUE:
             native_indent(out, indent);
@@ -249,8 +342,19 @@ static void native_emit_instr(NativeFrame *frame, const IRInstr *instr, FILE *ou
             fprintf(out, "RET\n");
             break;
         case IR_DECL_LOCAL:
-            // Frame slot registration and the FRAME_LOCAL line are handled
-            // by the caller so the slot table stays in sync.
+            break;
+        case IR_SCOPE_BEGIN:
+            frame->scope_depth++;
+            native_indent(out, indent);
+            fprintf(out, "SCOPE_BEGIN depth=%d\n", frame->scope_depth);
+            break;
+        case IR_SCOPE_END:
+            native_indent(out, indent);
+            fprintf(out, "SCOPE_END depth=%d\n", frame->scope_depth);
+            for (int i = 0; i < frame->count; i++) {
+                if (frame->depths[i] == frame->scope_depth) frame->active[i] = 0;
+            }
+            if (frame->scope_depth > 0) frame->scope_depth--;
             break;
         case IR_LABEL:
             native_indent(out, indent);
@@ -264,13 +368,18 @@ static void native_emit_instr(NativeFrame *frame, const IRInstr *instr, FILE *ou
             native_indent(out, indent);
             fprintf(out, "JUMP_IF_FALSE %s\n", instr->name);
             break;
+        case IR_JUMP_IF_TRUE:
+            native_indent(out, indent);
+            fprintf(out, "JUMP_IF_TRUE %s\n", instr->name);
+            break;
         case IR_SWITCH_DISPATCH:
             native_indent(out, indent);
             fprintf(out, "SWITCH_DISPATCH %s\n", instr->name);
             break;
         case IR_CASE:
             native_indent(out, indent);
-            fprintf(out, "LABEL %s\n", instr->name);
+            if (instr->flag) fprintf(out, "CASE_DEFAULT %s\n", instr->name);
+            else fprintf(out, "CASE_VALUE %lld %s\n", instr->value, instr->name);
             break;
         case IR_UNSAFE_BEGIN:
             native_indent(out, indent);
@@ -289,21 +398,109 @@ static void native_emit_instr(NativeFrame *frame, const IRInstr *instr, FILE *ou
             fprintf(out, "CONTINUE\n");
             break;
         case IR_UNSUPPORTED:
-            native_indent(out, indent);
-            fprintf(out, "UNSUPPORTED_%s\n", instr->name ? instr->name : "NODE");
+            if (instr->fallback_ast) native_emit_ast_fallback(instr->fallback_ast, out, indent);
+            else {
+                native_indent(out, indent);
+                fprintf(out, "UNSUPPORTED_%s\n", instr->name ? instr->name : "NODE");
+            }
             break;
     }
 }
 
+static void native_emit_ast_fallback(const ASTNode *node, FILE *out, int indent) {
+    native_indent(out, indent);
+    fprintf(out, "AST_FALLBACK_BEGIN\n");
+    native_indent(out, indent);
+    fprintf(out, "UNSUPPORTED_AST_NODE type=%d\n", node ? (int)node->type : -1);
+    native_indent(out, indent);
+    fprintf(out, "AST_FALLBACK_END\n");
+}
+static size_t native_find_label_index(IRFunction *fn, const char *name) {
+    for (size_t i = 0; i < fn->instr_count; i++) {
+        IRInstr *instr = &fn->instrs[i];
+        if ((instr->op == IR_LABEL || instr->op == IR_CASE) &&
+            instr->name && strcmp(instr->name, name) == 0) return i;
+    }
+    return fn->instr_count;
+}
+
+static void native_propagate_depth(size_t *depths, size_t index, size_t depth,
+                                   size_t count, int *changed, int *valid) {
+    if (index >= count) return;
+    if (depths[index] == (size_t)-1) {
+        depths[index] = depth;
+        *changed = 1;
+    } else if (depths[index] != depth) {
+        *valid = 0;
+    }
+}
+
+static int native_analyze_stack(IRFunction *fn, size_t *maximum) {
+    if (fn->instr_count == 0) {
+        *maximum = 0;
+        return 1;
+    }
+    size_t *depths = malloc(fn->instr_count * sizeof(size_t));
+    for (size_t i = 0; i < fn->instr_count; i++) depths[i] = (size_t)-1;
+    depths[0] = 0;
+    int valid = 1;
+    int changed = 1;
+    size_t max_depth = 0;
+
+    while (changed) {
+        changed = 0;
+        for (size_t i = 0; i < fn->instr_count; i++) {
+            if (depths[i] == (size_t)-1) continue;
+            IRInstr *instr = &fn->instrs[i];
+            size_t pops = 0, pushes = 0;
+            ir_instr_stack_effect(instr, &pops, &pushes);
+            if (pops > depths[i]) {
+                valid = 0;
+                continue;
+            }
+            size_t after = depths[i] - pops + pushes;
+            if (after > max_depth) max_depth = after;
+
+            if (instr->op == IR_RETURN) continue;
+            if (instr->op == IR_JUMP) {
+                native_propagate_depth(depths, native_find_label_index(fn, instr->name),
+                                       after, fn->instr_count, &changed, &valid);
+                continue;
+            }
+            if (instr->op == IR_JUMP_IF_FALSE || instr->op == IR_JUMP_IF_TRUE) {
+                native_propagate_depth(depths, native_find_label_index(fn, instr->name),
+                                       after, fn->instr_count, &changed, &valid);
+            }
+            if (instr->op == IR_SWITCH_DISPATCH) {
+                for (size_t j = i + 1; j < fn->instr_count; j++) {
+                    if (fn->instrs[j].op == IR_CASE) {
+                        native_propagate_depth(depths, j, after, fn->instr_count, &changed, &valid);
+                    }
+                    if (fn->instrs[j].op == IR_LABEL && fn->instrs[j].name &&
+                        strcmp(fn->instrs[j].name, instr->name) == 0) break;
+                }
+                native_propagate_depth(depths, native_find_label_index(fn, instr->name),
+                                       after, fn->instr_count, &changed, &valid);
+                continue;
+            }
+            native_propagate_depth(depths, i + 1, after, fn->instr_count, &changed, &valid);
+        }
+    }
+    free(depths);
+    *maximum = max_depth;
+    return valid;
+}
+
 // Emits one function in the debug native target from its lowered IR.
-static void native_emit_function(IRFunction *fn, FILE *out) {
+static void native_emit_function(IRFunction *fn, const NativeTargetInfo *target, FILE *out) {
     NativeFrame frame = {0};
     frame.frame_align = 1;
+    frame.target = target;
 
     fprintf(out, "FUNC %s RET %s\n", fn->name, fn->return_type);
     fprintf(out, "  FRAME_BEGIN %s\n", fn->name);
     for (size_t i = 0; i < fn->param_count; i++) {
-        int slot = native_add_slot(&frame, fn->params[i].name, fn->params[i].type, 0);
+        int slot = native_add_slot(&frame, fn->params[i].name, fn->params[i].type, fn->params[i].array_size);
         native_emit_frame_slot(&frame, out, 1, "FRAME_PARAM", slot, fn->params[i].type, fn->params[i].name);
     }
 
@@ -321,16 +518,32 @@ static void native_emit_function(IRFunction *fn, FILE *out) {
         native_emit_instr(&frame, instr, out, 1);
     }
 
-    fprintf(out, "  FRAME_SIZE %zu align=%zu\n", native_align_to(frame.frame_size, frame.frame_align), frame.frame_align);
+    size_t maximum_stack = 0;
+    int stack_valid = native_analyze_stack(fn, &maximum_stack);
+    size_t natural_frame_size = native_align_to(frame.frame_size, frame.frame_align);
+    fprintf(out, "  FRAME_SIZE %zu align=%zu\n", natural_frame_size, frame.frame_align);
+    fprintf(out, "  FRAME_STACK_SIZE %zu stack_align=%zu\n",
+            native_align_to(natural_frame_size, target->stack_align), target->stack_align);
+    fprintf(out, "  OPERAND_STACK_MAX %zu\n", maximum_stack);
+    if (!stack_valid) fprintf(out, "  OPERAND_STACK_INVALID\n");
     fprintf(out, "  FRAME_END %s slots=%d\n", fn->name, frame.count);
     fprintf(out, "END_FUNC\n\n");
 }
 
-void native_emit_debug(IRModule *module, FILE *out) {
+void native_emit_debug(IRModule *module, NativeTarget target_kind, FILE *out) {
+    const NativeTargetInfo *target = native_target_info(target_kind);
     fprintf(out, "pine_native_debug 0\n");
-    fprintf(out, "target stack-vm-text\n");
-    fprintf(out, "abi none\n");
-    fprintf(out, "object_format debug-text\n");
+    fprintf(out, "target %s\n", target->name);
+    fprintf(out, "target_triple %s\n", target->triple);
+    fprintf(out, "target_pointer_width %zu\n", target->pointer_size * 8);
+    fprintf(out, "target_endianness %s\n", target->endianness);
+    fprintf(out, "target_stack_alignment %zu\n", target->stack_align);
+    fprintf(out, "instruction_set stack-vm-text\n");
+    fprintf(out, "instruction_selection unsupported\n");
+    fprintf(out, "abi unsupported\n");
+    fprintf(out, "object_emission unsupported\n");
+    fprintf(out, "artifact_format debug-text\n");
+    fprintf(out, "expression_lowering operand-stack\n");
     fprintf(out, "control_flow labels-and-jumps\n\n");
     fprintf(out, "calls frame-slots\n\n");
     fprintf(out, "layout debug-primitive-sizes\n");
@@ -338,17 +551,17 @@ void native_emit_debug(IRModule *module, FILE *out) {
     fprintf(out, "source ir\n\n");
 
     for (size_t i = 0; i < module->struct_count; i++) {
-        native_emit_struct_layout(&module->structs[i], out);
+        native_emit_struct_layout(&module->structs[i], target, out);
     }
 
     for (size_t i = 0; i < module->global_count; i++) {
         IRGlobal *g = &module->globals[i];
-        NativeLayout layout = native_slot_layout(g->type, g->array_size);
+        NativeLayout layout = native_slot_layout(g->type, g->array_size, target);
         fprintf(out, "GLOBAL %s %s size=%zu align=%zu\n", g->type, g->name, layout.size, layout.align);
     }
     fprintf(out, "\n");
 
     for (size_t i = 0; i < module->function_count; i++) {
-        native_emit_function(&module->functions[i], out);
+        native_emit_function(&module->functions[i], target, out);
     }
 }

@@ -164,10 +164,15 @@ Recommended next native-backend approach:
 Current debug native target:
 
 ```text
-pine native <file>
+pine native <file> --target x86_64|aarch64|riscv64
   -> pine_native_debug 0
-  -> target stack-vm-text
-  -> abi none
+  -> target and target_triple metadata
+  -> architecture-specific pointer and stack layout
+  -> instruction_set stack-vm-text
+  -> instruction_selection unsupported
+  -> abi unsupported
+  -> object_emission unsupported
+  -> expression_lowering operand-stack
   -> control_flow labels-and-jumps
   -> calls frame-slots
   -> layout debug-primitive-sizes
@@ -175,7 +180,7 @@ pine native <file>
 
 The debug native artifact now models each function with a simple frame. Parameters and locals are assigned frame slots, identifier reads use `LOAD_SLOT`, local writes use `STORE_SLOT`, global access remains explicit, and calls record argument count plus a return value.
 
-The native debug artifact also assigns primitive debug sizes and alignments, then uses those values to model stack slot offsets, global storage size, and struct field layout. These values intentionally follow the C backend assumptions for now and are not a platform ABI contract.
+The native debug artifact also assigns primitive debug sizes and alignments, then uses those values to model stack slot offsets, global storage size, struct field layout, and target stack alignment. Target selection accepts `x86_64` (`x64`/`amd64`), `aarch64` (`arm64`), and `riscv64` (`rv64`). These targets currently share a 64-bit little-endian data model. The metadata is an input to future instruction selection and ABI work, not a claim that the current textual artifact is executable machine code.
 
 ## Pine 0.1 Shape
 
