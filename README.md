@@ -1,3 +1,4 @@
+[![Build](https://github.com/TxbiG/Pine/actions/workflows/build.yml/badge.svg)](https://github.com/TxbiG/Pine/actions/workflows/build.yml)
 # Pine Language
 
 Pine is a C-like systems programming language project focused on predictable performance, low-level control, and memory safety by default.
