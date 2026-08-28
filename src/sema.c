@@ -165,6 +165,7 @@ static Type type_from_base_name(Sema *sema, const char *name) {
     if (strcmp(name, "i8") == 0) return (Type){TYPE_I8};
     if (strcmp(name, "i16") == 0) return (Type){TYPE_I16};
     if (strcmp(name, "i32") == 0) return (Type){TYPE_I32};
+    if (strcmp(name, "int") == 0) return (Type){TYPE_I32};
     if (strcmp(name, "i64") == 0) return (Type){TYPE_I64};
     if (strcmp(name, "u8") == 0) return (Type){TYPE_U8};
     if (strcmp(name, "u16") == 0) return (Type){TYPE_U16};
