@@ -1,4 +1,7 @@
 
+void print(string s) {
+    printf("%s", s);
+}
 
 i32 main() {
     print("Hello world!");
