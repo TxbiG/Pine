@@ -290,6 +290,20 @@ Token lexer_next_token(Lexer *lexer) {
         return make_token(lexer, TOKEN_RDBRACKET, start, line, column);
     }
 
+    // handle # for #import
+    if (c == '#') {
+        return make_single(lexer, TOKEN_HASH, line, column);
+    }
+    
+    // handle <path> as a single path token (TOKEN_PATH)
+    if (c == '<') {
+        size_t start = lexer->pos;
+        advance(lexer); // consume '<'
+        while (peek(lexer) != '>' && peek(lexer) != '\0') advance(lexer);
+        if (peek(lexer) == '>') advance(lexer); // consume '>'
+        return make_token(lexer, TOKEN_PATH, start, line, column);
+    }
+
     switch (c) {
         case '+': return make_single(lexer, TOKEN_PLUS, line, column);
         case '-': return make_single(lexer, TOKEN_MINUS, line, column);
@@ -315,6 +329,7 @@ Token lexer_next_token(Lexer *lexer) {
         case ',': return make_single(lexer, TOKEN_COMMA, line, column);
         case ';': return make_single(lexer, TOKEN_SEMI, line, column);
         case ':': return make_single(lexer, TOKEN_COLON, line, column);
+        case '#': return make_single(lexer, TOKEN_HASH, line, column);
         default: return make_single(lexer, TOKEN_ERROR, line, column);
     }
 }
