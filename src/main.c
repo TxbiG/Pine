@@ -107,7 +107,32 @@ static char *resolve_import_path(const char *base_dir, const char *module_path) 
     }
     memcpy(path + base_length + 1 + module_length, ".pine", 6);
     return path;
+
+    /*
+    // If the module_path contains a slash or backslash, treat it as a path already.
+    if (strchr(module_path, '/') || strchr(module_path, '\\')) {
+        size_t base_length = strlen(base_dir);
+        size_t module_length = strlen(module_path);
+        char *path = malloc(base_length + 1 + module_length + 5 + 1);
+        memcpy(path, base_dir, base_length);
+        path[base_length] = '/';
+        memcpy(path + base_length + 1, module_path, module_length);
+        memcpy(path + base_length + 1 + module_length, ".pine", 6);
+        return path;
+    }
+
+    // Otherwise, existing behavior: dots -> path separators
+    size_t base_length = strlen(base_dir);
+    size_t module_length = strlen(module_path);
+    char *path = malloc(base_length + 1 + module_length + 5 + 1);
+    memcpy(path, base_dir, base_length);
+    path[base_length] = '/';
+    for (size_t i = 0; i < module_length; i++) {
+        path[base_length + 1 + i] = module_path[i] == '.' ? '/' : module_path[i];
+    }*/
 }
+
+
 
 // Resolves imports first relative to the importing file, then relative to cwd.
 static char *resolve_existing_import_path(const char *base_dir, const char *module_path) {
