@@ -533,6 +533,7 @@ The runtime should stay small. Pine should not require a garbage collector.
 4. Add project manifests and module/package discovery.
 5. Decide and document the fate of the reserved `class` keyword.
 6. Add underlined spans, suggestions, and structured diagnostic output.
+7. templates and vectors.
 
 ## Current Best Next Step
 
