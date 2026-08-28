@@ -73,7 +73,6 @@ static void synchronize(Parser *parser) {
 
         switch (parser->current.type) {
             case TOKEN_CONST:
-            case TOKEN_PUB:
             case TOKEN_PRIVATE:
             case TOKEN_STRUCT:
             case TOKEN_ENUM:
@@ -945,19 +944,12 @@ ASTNode *parse_program(Parser *parser) {
             continue;
         }
 
-        int is_public = 0;
-        if (check(parser, TOKEN_PUB) || check(parser, TOKEN_PRIVATE)) {
-            is_public = check(parser, TOKEN_PUB);
-            advance(parser);
-        }
-
         ASTNode *decl = NULL;
         if (check(parser, TOKEN_ENUM)) {
             decl = parse_enum_decl(parser);
         } else if (check(parser, TOKEN_STRUCT)) {
             decl = parse_struct_decl(parser);
         } else if (check(parser, TOKEN_IMPORT)) {
-            if (is_public) parse_error(parser, "imports cannot be public");
             decl = parse_import(parser);
         } else if (check(parser, TOKEN_CONST) || is_type_token(parser->current.type) || check(parser, TOKEN_IDENT)) {
             decl = parse_global_or_function(parser);
@@ -968,7 +960,6 @@ ASTNode *parse_program(Parser *parser) {
             continue;
         }
 
-        ast_set_public(decl, is_public);
         ast_list_append(program, decl);
         if (parser->errors > 0) synchronize(parser);
     }
