@@ -13,6 +13,7 @@ static const char *c_type(const char *pine_type) {
     if (strcmp(pine_type, "i8") == 0) return "int8_t";
     if (strcmp(pine_type, "i16") == 0) return "int16_t";
     if (strcmp(pine_type, "i32") == 0) return "int32_t";
+    if (strcmp(pine_type, "int") == 0) return "int";
     if (strcmp(pine_type, "i64") == 0) return "int64_t";
     if (strcmp(pine_type, "bool") == 0) return "bool";
     if (strcmp(pine_type, "char") == 0) return "char";
