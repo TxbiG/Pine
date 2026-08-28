@@ -867,6 +867,46 @@ static ASTNode *parse_import(Parser *parser) {
     Token first = consume(parser, TOKEN_IDENT, "expected module name after import");
     char *path = token_text(first);
 
+    /*
+
+        if (check(parser, TOKEN_STRING)) {
+        Token str = parser->current;
+        path = token_text(str); // token_text likely returns a heap string
+        // strip surrounding quotes if token_text includes them
+        if (path[0] == '"' && path[strlen(path)-1] == '"') {
+            path[strlen(path)-1] = '\0';
+            memmove(path, path+1, strlen(path)); // now path is the inner text
+        }
+        advance(parser);
+    } else if (check(parser, TOKEN_PATH)) {
+        Token p = parser->current;
+        path = token_text(p); // may include <...>
+        // strip '<' and '>' if present
+        size_t len = strlen(path);
+        if (len >= 2 && path[0] == '<' && path[len-1] == '>') {
+            path[len-1] = '\0';
+            memmove(path, path+1, len-1);
+        }
+        advance(parser);
+    } else {
+        // existing dotted-module parsing
+        Token first = consume(parser, TOKEN_IDENT, "expected module name after import");
+        path = token_text(first);
+        while (check(parser, TOKEN_DOT)) {
+            advance(parser);
+            Token part = consume(parser, TOKEN_IDENT, "expected module path segment after '.'");
+            char *part_text = token_text(part);
+            path = append_char(path, '.');
+            size_t path_length = strlen(path);
+            size_t part_length = strlen(part_text);
+            char *next = realloc(path, path_length + part_length + 1);
+            memcpy(next + path_length, part_text, part_length + 1);
+            path = next;
+            free(part_text);
+        }
+    }
+    */
+
     while (check(parser, TOKEN_DOT)) {
         advance(parser);
         Token part = consume(parser, TOKEN_IDENT, "expected module path segment after '.'");
