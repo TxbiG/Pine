@@ -104,6 +104,9 @@ typedef enum {
     TOKEN_LDBRACKET,
     TOKEN_RDBRACKET,
 
+    TOKEN_HASH,
+    TOKEN_PATH,
+
     // Reserved for future inline-assembly support (Phase 5/6 of the
     // roadmap: "inline assembly requires unsafe"). Not yet consumed
     // by the parser.
