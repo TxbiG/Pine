@@ -53,6 +53,7 @@ typedef enum {
     TOKEN_STRUCT,
     TOKEN_CLASS,
     TOKEN_UNION,
+    TOKEN_TEMPLATE,
 
     TOKEN_IMPORT,
 
