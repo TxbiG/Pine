@@ -1,5 +1,5 @@
-import std.math;
+
 
 i32 main() {
-    return std_clamp_i32(std_square_i32(6), 0, 42);
+    return 0;
 }
