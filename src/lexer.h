@@ -49,6 +49,7 @@ typedef enum {
 
     // Reserved for future data-type work (Phase 4 of the roadmap).
     // Not yet consumed by the parser.
+    TOKEN_EXTERN,
     TOKEN_ENUM,
     TOKEN_STRUCT,
     TOKEN_CLASS,
