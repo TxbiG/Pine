@@ -1,0 +1,167 @@
+// <net> - sockets: TCP and UDP clients/servers, IPv4 and IPv6, polling, socket options,
+// DNS and address helpers, and byte-order packing helpers.
+//
+// Sockets are small integer handles. Buffers are byte slices: pass a fixed array such as
+// `u8 buf[1024];` wherever a `[]u8` is expected. Calls return -1 on failure unless noted;
+// net_last_error() / net_error_text() describe why, and net_would_block() says whether the
+// failure was just "nothing yet" (a timeout or a non-blocking call). Requires
+// runtime/pine_rt.c at link time (and -lws2_32 on Windows).
+//
+// Not included: TLS, raw sockets, and Unix-domain sockets.
+
+// ---- constants ----
+pub const i32 NET_POLL_IN = 1;        // readable / a connection is waiting
+pub const i32 NET_POLL_OUT = 2;       // writable
+pub const i32 NET_POLL_ERR = 4;       // error (result only)
+pub const i32 NET_POLL_HUP = 8;       // hang-up (result only)
+pub const i32 NET_POLL_INVALID = 16;  // bad socket handle (result only)
+
+pub const i32 NET_SHUT_READ = 0;
+pub const i32 NET_SHUT_WRITE = 1;
+pub const i32 NET_SHUT_BOTH = 2;
+
+// ---- errors ----
+// OS error code (errno / WSAGetLastError) of the most recent failed call; -1 means a
+// host name could not be resolved.
+pub i32 net_last_error();
+
+// True when the last failure only meant "no data/room yet" or "timed out".
+pub bool net_would_block();
+
+// Text for an error code written into out (no terminator). Returns the length or -1.
+pub i32 net_error_text(i32 code, []u8 out);
+
+// ---- TCP client ----
+// Connects to host:port (a name or an address such as "example.com" or "::1").
+pub i32 net_tcp_connect(string host, i32 port);
+
+// As net_tcp_connect, but gives up after timeout_ms (0 = wait as long as the OS does).
+pub i32 net_tcp_connect_timeout(string host, i32 port, i32 timeout_ms);
+
+// ---- TCP server ----
+// IPv4 listener. host "" listens on all interfaces; port 0 lets the OS choose a free port
+// (read it back with net_local_port).
+pub i32 net_tcp_listen(string host, i32 port, i32 backlog);
+
+// IPv6 listener (dual-stack where the OS supports it).
+pub i32 net_tcp_listen6(string host, i32 port, i32 backlog);
+
+// Blocks until a client connects and returns the connection handle.
+pub i32 net_accept(i32 listener);
+
+// As net_accept, but waits at most timeout_ms (on timeout: -1 and net_would_block() is true).
+pub i32 net_accept_timeout(i32 listener, i32 timeout_ms);
+
+// ---- UDP ----
+// Binds a UDP socket. host "" = all interfaces; port 0 = any free port.
+pub i32 net_udp_open(string host, i32 port);
+pub i32 net_udp_open6(string host, i32 port);
+
+// A UDP socket connected to host:port: use net_send / net_recv with it; only that peer is heard.
+pub i32 net_udp_connect(string host, i32 port);
+
+// Sends the first n bytes of data as one datagram to host:port. Returns bytes sent or -1.
+pub i64 net_send_to(i32 socket, string host, i32 port, []u8 data, i64 n);
+
+// Receives one datagram. Returns its size or -1. Read the sender with net_from_host / net_from_port.
+pub i64 net_recv_from(i32 socket, []u8 buf);
+pub i32 net_from_host([]u8 out);
+pub i32 net_from_port();
+
+// IPv4 multicast. Join a group like "224.0.0.251" on a bound UDP socket.
+pub i32 net_multicast_join(i32 socket, string group);
+pub i32 net_multicast_leave(i32 socket, string group);
+pub i32 net_set_multicast_ttl(i32 socket, i32 ttl);
+pub i32 net_set_multicast_loop(i32 socket, bool enabled);
+pub i32 net_set_broadcast(i32 socket, bool enabled);
+
+// ---- sending and receiving (TCP, and connected UDP) ----
+// Sends the first n bytes of data, looping until all are sent. Returns n or -1.
+pub i64 net_send(i32 socket, []u8 data, i64 n);
+
+// Sends a string without its terminator. Returns bytes sent or -1.
+pub i64 net_send_str(i32 socket, string text);
+
+// Receives up to buf.length bytes. Returns the count, 0 when the peer closed the connection,
+// or -1 on error or timeout.
+pub i64 net_recv(i32 socket, []u8 buf);
+
+// Like net_recv but leaves the data queued.
+pub i64 net_peek(i32 socket, []u8 buf);
+
+// Reads exactly n bytes (or until the peer closes). Returns the bytes read, or -1 on error.
+pub i64 net_recv_exact(i32 socket, []u8 buf, i64 n);
+
+// Stops one or both directions without closing the handle (see NET_SHUT_*).
+pub i32 net_shutdown(i32 socket, i32 how);
+
+pub i32 net_close(i32 socket);
+
+// ---- readiness ----
+// Waits up to timeout_ms (negative = forever, 0 = just check) for events (NET_POLL_IN / OUT bits).
+// Returns the ready bits, 0 on timeout, or -1 on error.
+pub i32 net_poll(i32 socket, i32 events, i32 timeout_ms);
+
+// Polls up to 64 sockets: socks[i] and events[i] go in, revents[i] comes out. Returns how
+// many are ready (0 on timeout) or -1.
+pub i32 net_poll_many([]i32 socks, []i32 events, []i32 revents, i32 count, i32 timeout_ms);
+
+// True when data (or a pending connection) can be read without blocking within timeout_ms.
+pub bool net_readable(i32 socket, i32 timeout_ms) {
+    i32 ready = net_poll(socket, NET_POLL_IN, timeout_ms);
+    if (ready < 0) {
+        return false;
+    }
+    return ready % 2 == 1;
+}
+
+// True when the socket can accept more data without blocking within timeout_ms.
+pub bool net_writable(i32 socket, i32 timeout_ms) {
+    i32 ready = net_poll(socket, NET_POLL_OUT, timeout_ms);
+    if (ready < 0) {
+        return false;
+    }
+    return (ready / 2) % 2 == 1;
+}
+
+// ---- socket options (return 0, or -1 on failure) ----
+pub i32 net_set_nonblocking(i32 socket, bool enabled);
+pub i32 net_set_nodelay(i32 socket, bool enabled);         // TCP: disable Nagle's algorithm
+pub i32 net_set_keepalive(i32 socket, bool enabled);
+pub i32 net_set_reuseaddr(i32 socket, bool enabled);
+pub i32 net_set_linger(i32 socket, bool enabled, i32 seconds);
+pub i32 net_set_recv_buffer(i32 socket, i32 bytes);
+pub i32 net_set_send_buffer(i32 socket, i32 bytes);
+pub i32 net_set_timeout_ms(i32 socket, i32 milliseconds);        // receive and send; 0 disables
+pub i32 net_set_recv_timeout_ms(i32 socket, i32 milliseconds);
+pub i32 net_set_send_timeout_ms(i32 socket, i32 milliseconds);
+
+// ---- addresses and names ----
+// Port a socket is bound to.
+pub i32 net_local_port(i32 socket);
+
+// Local / peer address of a socket as text (no port) into out. Returns the length or -1.
+pub i32 net_local_addr(i32 socket, []u8 out);
+pub i32 net_remote_addr(i32 socket, []u8 out);
+pub i32 net_remote_port(i32 socket);
+
+// DNS lookup: first address for host as text into out. Returns the length or -1.
+pub i32 net_resolve(string host, []u8 out);
+
+// This machine's host name into out. Returns the length or -1.
+pub i32 net_hostname([]u8 out);
+
+pub bool net_is_ipv4(string text);
+pub bool net_is_ipv6(string text);
+
+// ---- packing integers into buffers ----
+// put returns 0, or -1 if the value or offset does not fit; get returns the value, or -1 if
+// the offset is out of range. Plain names are big-endian (network order); _le is little-endian.
+pub i32 net_put_u16([]u8 buf, i32 offset, i32 value);
+pub i32 net_put_u16_le([]u8 buf, i32 offset, i32 value);
+pub i32 net_put_u32([]u8 buf, i32 offset, i64 value);
+pub i32 net_put_u32_le([]u8 buf, i32 offset, i64 value);
+pub i32 net_get_u16([]u8 buf, i32 offset);
+pub i32 net_get_u16_le([]u8 buf, i32 offset);
+pub i64 net_get_u32([]u8 buf, i32 offset);
+pub i64 net_get_u32_le([]u8 buf, i32 offset);

@@ -1,0 +1,30 @@
+// <str> - C string helpers. Pine `string` values cannot be indexed directly yet,
+// so these externals (defined in runtime/pine_rt.c) expose length and byte access.
+
+// Number of bytes before the terminating NUL (0 for a null string).
+pub i32 str_len(string s);
+
+// Byte at index i as 0..255; 0 at the terminator; -1 when i is out of range.
+pub i32 str_at(string s, i32 i);
+
+// Copies the bytes of `s` (without the terminator) into dst. Returns the length,
+// or -1 if dst is too small. This is how text becomes a byte buffer:
+//     u8 buf[256];
+//     i32 n = str_copy("{\"a\":1}", buf);
+pub i32 str_copy(string s, []u8 dst);
+
+// True when src[start .. end) holds exactly the bytes of `text`.
+pub bool str_eq_span([]u8 src, i32 start, i32 end, string text) {
+    i32 n = str_len(text);
+    if (end - start != n) {
+        return false;
+    }
+    i32 i = 0;
+    while (i < n) {
+        if (src[start + i] != str_at(text, i)) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}

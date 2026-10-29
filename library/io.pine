@@ -1,0 +1,79 @@
+// <io> - console and file input/output.
+//
+// Files and standard streams are small integer handles. Buffers are byte slices:
+// pass a fixed array such as `u8 buf[256];` wherever a `[]u8` is expected.
+// Functions return -1 on failure unless noted. Requires runtime/pine_rt.c at link time.
+
+pub const i32 IO_STDIN = 0;
+pub const i32 IO_STDOUT = 1;
+pub const i32 IO_STDERR = 2;
+
+pub const i32 IO_READ = 0;     // open an existing file for reading
+pub const i32 IO_WRITE = 1;    // create or truncate a file for writing
+pub const i32 IO_APPEND = 2;   // create or append
+
+// ---- console ----
+pub void io_print(string text);
+pub void io_println(string text);
+pub void io_eprint(string text);
+pub void io_eprintln(string text);
+pub void io_print_i64(i64 value);
+
+// ---- handles ----
+// Opens a file; returns a handle >= 3, or -1.
+pub i32 io_open(string path, i32 mode);
+pub i32 io_close(i32 handle);
+pub i32 io_flush(i32 handle);
+
+// Reads up to buf.length bytes. Returns the count read, 0 at end of file, -1 on error.
+pub i64 io_read(i32 handle, []u8 buf);
+
+// Reads one line without its line ending. Returns the length, -1 at end of input,
+// or -2 when the line does not fit in buf.
+pub i64 io_read_line(i32 handle, []u8 buf);
+
+// Writes all of data / the first n bytes of data. Returns bytes written or -1.
+pub i64 io_write(i32 handle, []u8 data);
+pub i64 io_write_n(i32 handle, []u8 data, i64 n);
+
+// ---- whole files ----
+pub bool io_file_exists(string path);
+pub i64 io_file_size(string path);
+pub i32 io_remove(string path);
+
+// Reads an entire file into buf. Returns the byte count, or -1 if the file cannot be
+// opened or does not fit in buf.
+pub i64 io_read_file(string path, []u8 buf) {
+    i64 size = io_file_size(path);
+    if (size < 0) {
+        return -1;
+    }
+    if (size > buf.length) {
+        return -1;
+    }
+    i32 handle = io_open(path, IO_READ);
+    if (handle < 0) {
+        return -1;
+    }
+    i64 total = 0;
+    while (total < size) {
+        i64 n = io_read(handle, buf);
+        if (n <= 0) {
+            break;
+        }
+        total = total + n;
+    }
+    io_close(handle);
+    return total;
+}
+
+// Creates or truncates a file and writes the first n bytes of data. Returns n or -1.
+pub i64 io_write_file(string path, []u8 data, i64 n) {
+    i32 handle = io_open(path, IO_WRITE);
+    if (handle < 0) {
+        return -1;
+    }
+    i64 written = io_write_n(handle, data, n);
+    io_close(handle);
+    return written;
+}

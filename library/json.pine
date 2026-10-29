@@ -1,0 +1,664 @@
+// <json> - allocation-free JSON parser and writer.
+//
+// Parsing never allocates: you hand json_doc() caller-owned arrays and json_parse() fills
+// them with one token per JSON value (object, array, string, number, bool, null), each
+// token pointing back into the source bytes.
+//
+//     #import <json>
+//
+//     i32 main() {
+//         u8 text[32] = [123, 34, 97, 34, 58, 49, 125];     // {"a":1}
+//         i32 kinds[16];  i32 starts[16];  i32 ends[16];  i32 sizes[16];  i32 parents[16];
+//         JsonDoc doc = json_doc(text, 7, kinds, starts, ends, sizes, parents);
+//         doc = json_parse(doc);
+//         if (doc.count < 0) { return 1; }                  // JSON_ERR_*
+//         i32 a = json_get(doc, 0, "a");                    // token 0 is the root
+//         return (i32)json_to_i64(doc, a);
+//     }
+//
+// Tokens are numbered in document order; token 0 is the root value. For a string token the
+// range is the text between the quotes (escapes still encoded; use json_string to decode).
+// For other tokens it is the exact source text.
+//
+// Validation: brackets, string escapes, literals (true/false/null) and number syntax are
+// checked; the comma/colon grammar between values is not enforced, so malformed-but-balanced
+// input such as {"a" 1} is accepted.
+//
+// Number support: json_to_i64 reads the integer part; fractional/exponent numbers are
+// tokenized (json_is_integer tells them apart) but there is no floating-point accessor yet.
+//
+// Requires runtime/pine_rt.c at link time (for <str>).
+
+#import <str>
+
+pub const i32 JSON_OBJECT = 1;
+pub const i32 JSON_ARRAY = 2;
+pub const i32 JSON_STRING = 3;
+pub const i32 JSON_NUMBER = 4;
+pub const i32 JSON_BOOL = 5;
+pub const i32 JSON_NULL = 6;
+
+pub const i32 JSON_ERR_NOMEM = -1;   // token arrays too small
+pub const i32 JSON_ERR_INVAL = -2;   // invalid JSON
+pub const i32 JSON_ERR_PART = -3;    // input ended early (unterminated string/object/array)
+
+pub struct JsonDoc {
+    []u8 src;
+    i32 src_len;
+    []i32 kinds;
+    []i32 starts;
+    []i32 ends;
+    []i32 sizes;     // direct children: array elements, or object key/value pairs
+    []i32 parents;
+    i64 capacity;
+    i32 count;       // tokens produced by json_parse, or a negative JSON_ERR_*
+}
+
+// Binds source bytes and token storage (all five arrays must have the same length).
+pub JsonDoc json_doc([]u8 src, i32 src_len, []i32 kinds, []i32 starts, []i32 ends, []i32 sizes, []i32 parents) {
+    JsonDoc doc = JsonDoc {
+        src: src,
+        src_len: src_len,
+        kinds: kinds,
+        starts: starts,
+        ends: ends,
+        sizes: sizes,
+        parents: parents,
+        capacity: kinds.length,
+        count: 0
+    };
+    return doc;
+}
+
+// ---------------------------------------------------------------- parsing
+
+bool json_is_digit(i32 c) {
+    return c >= 48 && c <= 57;
+}
+
+bool json_is_hex(i32 c) {
+    return (c >= 48 && c <= 57) || (c >= 97 && c <= 102) || (c >= 65 && c <= 70);
+}
+
+i32 json_hex_value(i32 c) {
+    if (c >= 48 && c <= 57) {
+        return c - 48;
+    }
+    if (c >= 97 && c <= 102) {
+        return c - 97 + 10;
+    }
+    return c - 65 + 10;
+}
+
+// Returns the index of the closing quote of the string opening at `pos`, or a JSON_ERR_*.
+i32 json_scan_string(JsonDoc doc, i32 pos) {
+    i32 i = pos + 1;
+    while (i < doc.src_len) {
+        i32 c = doc.src[i];
+        if (c == 34) {
+            return i;
+        }
+        if (c < 32) {
+            return JSON_ERR_INVAL;
+        }
+        if (c == 92) {
+            i = i + 1;
+            if (i >= doc.src_len) {
+                return JSON_ERR_PART;
+            }
+            i32 e = doc.src[i];
+            if (e == 34 || e == 92 || e == 47 || e == 98 || e == 102 || e == 110 || e == 114 || e == 116) {
+                i = i + 1;
+            } else if (e == 117) {
+                if (i + 4 >= doc.src_len) {
+                    return JSON_ERR_PART;
+                }
+                i32 k = 1;
+                while (k <= 4) {
+                    if (!json_is_hex(doc.src[i + k])) {
+                        return JSON_ERR_INVAL;
+                    }
+                    k = k + 1;
+                }
+                i = i + 5;
+            } else {
+                return JSON_ERR_INVAL;
+            }
+        } else {
+            i = i + 1;
+        }
+    }
+    return JSON_ERR_PART;
+}
+
+// Validates number syntax in src[start, end).
+bool json_valid_number(JsonDoc doc, i32 start, i32 end) {
+    i32 i = start;
+    if (i < end && doc.src[i] == 45) {
+        i = i + 1;
+    }
+    if (i >= end) {
+        return false;
+    }
+    if (doc.src[i] == 48) {
+        i = i + 1;
+    } else if (doc.src[i] >= 49 && doc.src[i] <= 57) {
+        while (i < end && json_is_digit(doc.src[i])) {
+            i = i + 1;
+        }
+    } else {
+        return false;
+    }
+    if (i < end && doc.src[i] == 46) {
+        i = i + 1;
+        i32 frac_start = i;
+        while (i < end && json_is_digit(doc.src[i])) {
+            i = i + 1;
+        }
+        if (i == frac_start) {
+            return false;
+        }
+    }
+    if (i < end && (doc.src[i] == 101 || doc.src[i] == 69)) {
+        i = i + 1;
+        if (i < end && (doc.src[i] == 43 || doc.src[i] == 45)) {
+            i = i + 1;
+        }
+        i32 exp_start = i;
+        while (i < end && json_is_digit(doc.src[i])) {
+            i = i + 1;
+        }
+        if (i == exp_start) {
+            return false;
+        }
+    }
+    return i == end;
+}
+
+// Appends one token and attaches it to its parent. Returns the token index.
+i32 json_add(JsonDoc doc, i32 index, i32 kind, i32 start, i32 end, i32 parent) {
+    doc.kinds[index] = kind;
+    doc.starts[index] = start;
+    doc.ends[index] = end;
+    doc.sizes[index] = 0;
+    doc.parents[index] = parent;
+    if (parent != -1) {
+        doc.sizes[parent] = doc.sizes[parent] + 1;
+    }
+    return index;
+}
+
+// Finds the innermost still-open container strictly before token `before`, or -1.
+i32 json_open_container(JsonDoc doc, i32 before) {
+    i32 i = before - 1;
+    while (i >= 0) {
+        if (doc.ends[i] == -1) {
+            return i;
+        }
+        i = i - 1;
+    }
+    return -1;
+}
+
+// Tokenizes doc.src[0, src_len). On return doc.count is the token count or a JSON_ERR_*.
+pub JsonDoc json_parse(JsonDoc doc) {
+    i32 pos = 0;
+    i32 count = 0;
+    i32 cur = -1;   // token new values attach to: an open container, or a key awaiting its value
+
+    while (pos < doc.src_len) {
+        i32 c = doc.src[pos];
+
+        if (c == 123 || c == 91) {
+            if (count >= doc.capacity) {
+                doc.count = JSON_ERR_NOMEM;
+                return doc;
+            }
+            i32 kind = JSON_ARRAY;
+            if (c == 123) {
+                kind = JSON_OBJECT;
+            }
+            cur = json_add(doc, count, kind, pos, -1, cur);
+            count = count + 1;
+        } else if (c == 125 || c == 93) {
+            i32 open = json_open_container(doc, count);
+            if (open < 0) {
+                doc.count = JSON_ERR_INVAL;
+                return doc;
+            }
+            i32 want = JSON_ARRAY;
+            if (c == 125) {
+                want = JSON_OBJECT;
+            }
+            if (doc.kinds[open] != want) {
+                doc.count = JSON_ERR_INVAL;
+                return doc;
+            }
+            doc.ends[open] = pos + 1;
+            cur = json_open_container(doc, open);
+        } else if (c == 34) {
+            if (count >= doc.capacity) {
+                doc.count = JSON_ERR_NOMEM;
+                return doc;
+            }
+            i32 close = json_scan_string(doc, pos);
+            if (close < 0) {
+                doc.count = close;
+                return doc;
+            }
+            json_add(doc, count, JSON_STRING, pos + 1, close, cur);
+            count = count + 1;
+            pos = close;
+        } else if (c == 58) {
+            // ':' must follow an object key
+            if (count == 0 || doc.kinds[count - 1] != JSON_STRING || cur == -1 || doc.kinds[cur] != JSON_OBJECT) {
+                doc.count = JSON_ERR_INVAL;
+                return doc;
+            }
+            cur = count - 1;
+        } else if (c == 44) {
+            if (cur != -1 && doc.kinds[cur] != JSON_ARRAY && doc.kinds[cur] != JSON_OBJECT) {
+                cur = doc.parents[cur];
+            }
+        } else if (c == 9 || c == 10 || c == 13 || c == 32) {
+            // whitespace
+        } else if (c == 45 || json_is_digit(c) || c == 116 || c == 102 || c == 110) {
+            if (count >= doc.capacity) {
+                doc.count = JSON_ERR_NOMEM;
+                return doc;
+            }
+            i32 end = pos;
+            while (end < doc.src_len) {
+                i32 d = doc.src[end];
+                if (d == 9 || d == 10 || d == 13 || d == 32 || d == 44 || d == 93 || d == 125) {
+                    break;
+                }
+                end = end + 1;
+            }
+            i32 kind = JSON_NUMBER;
+            bool ok = false;
+            if (c == 116) {
+                kind = JSON_BOOL;
+                ok = str_eq_span(doc.src, pos, end, "true");
+            } else if (c == 102) {
+                kind = JSON_BOOL;
+                ok = str_eq_span(doc.src, pos, end, "false");
+            } else if (c == 110) {
+                kind = JSON_NULL;
+                ok = str_eq_span(doc.src, pos, end, "null");
+            } else {
+                ok = json_valid_number(doc, pos, end);
+            }
+            if (!ok) {
+                doc.count = JSON_ERR_INVAL;
+                return doc;
+            }
+            json_add(doc, count, kind, pos, end, cur);
+            count = count + 1;
+            pos = end - 1;
+        } else {
+            doc.count = JSON_ERR_INVAL;
+            return doc;
+        }
+        pos = pos + 1;
+    }
+
+    if (json_open_container(doc, count) != -1) {
+        doc.count = JSON_ERR_PART;
+        return doc;
+    }
+    doc.count = count;
+    return doc;
+}
+
+// -------------------------------------------------------------- accessors
+
+pub i32 json_kind(JsonDoc doc, i32 tok) {
+    if (tok < 0 || tok >= doc.count) {
+        return 0;
+    }
+    return doc.kinds[tok];
+}
+
+// Number of direct children (array elements, or object key/value pairs).
+pub i32 json_size(JsonDoc doc, i32 tok) {
+    if (tok < 0 || tok >= doc.count) {
+        return 0;
+    }
+    return doc.sizes[tok];
+}
+
+// Index of the first token after tok and everything nested inside it.
+pub i32 json_next(JsonDoc doc, i32 tok) {
+    i32 pending = 1;
+    i32 j = tok;
+    while (pending > 0 && j < doc.count) {
+        pending = pending - 1 + doc.sizes[j];
+        j = j + 1;
+    }
+    return j;
+}
+
+// True when a string token's raw text equals `text` (escapes are not decoded).
+pub bool json_str_eq(JsonDoc doc, i32 tok, string text) {
+    if (json_kind(doc, tok) != JSON_STRING) {
+        return false;
+    }
+    return str_eq_span(doc.src, doc.starts[tok], doc.ends[tok], text);
+}
+
+// Value token for `key` in object token `obj`, or -1. Keys are compared as raw text.
+pub i32 json_get(JsonDoc doc, i32 obj, string key) {
+    if (json_kind(doc, obj) != JSON_OBJECT) {
+        return -1;
+    }
+    i32 pairs = doc.sizes[obj];
+    i32 j = obj + 1;
+    i32 n = 0;
+    while (n < pairs) {
+        if (json_str_eq(doc, j, key)) {
+            return j + 1;
+        }
+        j = json_next(doc, j + 1);
+        n = n + 1;
+    }
+    return -1;
+}
+
+// Element `index` of array token `arr`, or -1.
+pub i32 json_at(JsonDoc doc, i32 arr, i32 index) {
+    if (json_kind(doc, arr) != JSON_ARRAY || index < 0 || index >= doc.sizes[arr]) {
+        return -1;
+    }
+    i32 j = arr + 1;
+    i32 n = 0;
+    while (n < index) {
+        j = json_next(doc, j);
+        n = n + 1;
+    }
+    return j;
+}
+
+pub bool json_to_bool(JsonDoc doc, i32 tok) {
+    if (json_kind(doc, tok) != JSON_BOOL) {
+        return false;
+    }
+    return doc.src[doc.starts[tok]] == 116;
+}
+
+// True for a number token with no fraction or exponent.
+pub bool json_is_integer(JsonDoc doc, i32 tok) {
+    if (json_kind(doc, tok) != JSON_NUMBER) {
+        return false;
+    }
+    i32 i = doc.starts[tok];
+    while (i < doc.ends[tok]) {
+        i32 c = doc.src[i];
+        if (c == 46 || c == 101 || c == 69) {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+// Integer part of a number token (0 for other tokens). Values beyond the i64 range wrap.
+pub i64 json_to_i64(JsonDoc doc, i32 tok) {
+    if (json_kind(doc, tok) != JSON_NUMBER) {
+        return 0;
+    }
+    i32 i = doc.starts[tok];
+    bool negative = false;
+    if (doc.src[i] == 45) {
+        negative = true;
+        i = i + 1;
+    }
+    i64 value = 0;
+    while (i < doc.ends[tok] && json_is_digit(doc.src[i])) {
+        value = value * 10 + (doc.src[i] - 48);
+        i = i + 1;
+    }
+    if (negative) {
+        return 0 - value;
+    }
+    return value;
+}
+
+// Appends a code point as UTF-8 at out[n]; returns the new length or -1 when out is full.
+i32 json_put_utf8([]u8 out, i32 n, i32 cp) {
+    if (cp < 128) {
+        if (n + 1 > out.length) {
+            return -1;
+        }
+        out[n] = cp;
+        return n + 1;
+    }
+    if (cp < 2048) {
+        if (n + 2 > out.length) {
+            return -1;
+        }
+        out[n] = 192 + cp / 64;
+        out[n + 1] = 128 + cp % 64;
+        return n + 2;
+    }
+    if (cp < 65536) {
+        if (n + 3 > out.length) {
+            return -1;
+        }
+        out[n] = 224 + cp / 4096;
+        out[n + 1] = 128 + (cp / 64) % 64;
+        out[n + 2] = 128 + cp % 64;
+        return n + 3;
+    }
+    if (n + 4 > out.length) {
+        return -1;
+    }
+    out[n] = 240 + cp / 262144;
+    out[n + 1] = 128 + (cp / 4096) % 64;
+    out[n + 2] = 128 + (cp / 64) % 64;
+    out[n + 3] = 128 + cp % 64;
+    return n + 4;
+}
+
+i32 json_read_hex4(JsonDoc doc, i32 at) {
+    i32 v = 0;
+    i32 k = 0;
+    while (k < 4) {
+        v = v * 16 + json_hex_value(doc.src[at + k]);
+        k = k + 1;
+    }
+    return v;
+}
+
+// Decodes a string token (escapes and \uXXXX, including surrogate pairs) into out as UTF-8.
+// Returns the decoded length (no terminator written), or -1 if tok is not a string or out is too small.
+pub i32 json_string(JsonDoc doc, i32 tok, []u8 out) {
+    if (json_kind(doc, tok) != JSON_STRING) {
+        return -1;
+    }
+    i32 i = doc.starts[tok];
+    i32 end = doc.ends[tok];
+    i32 n = 0;
+    while (i < end) {
+        i32 c = doc.src[i];
+        if (c != 92) {
+            if (n + 1 > out.length) {
+                return -1;
+            }
+            out[n] = c;
+            n = n + 1;
+            i = i + 1;
+        } else {
+            i32 e = doc.src[i + 1];
+            i32 decoded = e;
+            i32 advance = 2;
+            if (e == 98) {
+                decoded = 8;
+            } else if (e == 102) {
+                decoded = 12;
+            } else if (e == 110) {
+                decoded = 10;
+            } else if (e == 114) {
+                decoded = 13;
+            } else if (e == 116) {
+                decoded = 9;
+            } else if (e == 117) {
+                decoded = json_read_hex4(doc, i + 2);
+                advance = 6;
+                if (decoded >= 55296 && decoded <= 56319 && i + 11 < end + 1 && doc.src[i + 6] == 92 && doc.src[i + 7] == 117) {
+                    i32 low = json_read_hex4(doc, i + 8);
+                    if (low >= 56320 && low <= 57343) {
+                        decoded = 65536 + (decoded - 55296) * 1024 + (low - 56320);
+                        advance = 12;
+                    }
+                }
+            }
+            n = json_put_utf8(out, n, decoded);
+            if (n < 0) {
+                return -1;
+            }
+            i = i + advance;
+        }
+    }
+    return n;
+}
+
+// ---------------------------------------------------------------- writing
+//
+// Writers append to buf at `pos` and return the new position, or -1 once the buffer is full
+// (a -1 position stays -1, so a whole document can be built and checked once at the end):
+//
+//     i32 p = 0;
+//     p = json_w_begin_object(out, p);
+//     p = json_w_key(out, p, "name");   p = json_w_string(out, p, "Pine");
+//     p = json_w_comma(out, p);
+//     p = json_w_key(out, p, "stars");  p = json_w_i64(out, p, 42);
+//     p = json_w_end_object(out, p);
+//     if (p < 0) { /* buffer too small */ }
+
+pub i32 json_w_byte([]u8 buf, i32 pos, i32 b) {
+    if (pos < 0 || pos >= buf.length) {
+        return -1;
+    }
+    buf[pos] = b;
+    return pos + 1;
+}
+
+// Appends raw text exactly as given (no escaping).
+pub i32 json_w_raw([]u8 buf, i32 pos, string text) {
+    i32 n = str_len(text);
+    i32 i = 0;
+    while (i < n) {
+        pos = json_w_byte(buf, pos, str_at(text, i));
+        i = i + 1;
+    }
+    return pos;
+}
+
+pub i32 json_w_begin_object([]u8 buf, i32 pos) {
+    return json_w_byte(buf, pos, 123);
+}
+
+pub i32 json_w_end_object([]u8 buf, i32 pos) {
+    return json_w_byte(buf, pos, 125);
+}
+
+pub i32 json_w_begin_array([]u8 buf, i32 pos) {
+    return json_w_byte(buf, pos, 91);
+}
+
+pub i32 json_w_end_array([]u8 buf, i32 pos) {
+    return json_w_byte(buf, pos, 93);
+}
+
+pub i32 json_w_comma([]u8 buf, i32 pos) {
+    return json_w_byte(buf, pos, 44);
+}
+
+// Appends a quoted, escaped JSON string.
+pub i32 json_w_string([]u8 buf, i32 pos, string text) {
+    pos = json_w_byte(buf, pos, 34);
+    i32 n = str_len(text);
+    i32 i = 0;
+    while (i < n) {
+        i32 c = str_at(text, i);
+        if (c == 34) {
+            pos = json_w_raw(buf, pos, "\\\"");
+        } else if (c == 92) {
+            pos = json_w_raw(buf, pos, "\\\\");
+        } else if (c == 10) {
+            pos = json_w_raw(buf, pos, "\\n");
+        } else if (c == 13) {
+            pos = json_w_raw(buf, pos, "\\r");
+        } else if (c == 9) {
+            pos = json_w_raw(buf, pos, "\\t");
+        } else if (c == 8) {
+            pos = json_w_raw(buf, pos, "\\b");
+        } else if (c == 12) {
+            pos = json_w_raw(buf, pos, "\\f");
+        } else if (c < 32) {
+            pos = json_w_raw(buf, pos, "\\u00");
+            i32 hi = c / 16;
+            i32 lo = c % 16;
+            pos = json_w_byte(buf, pos, str_at("0123456789abcdef", hi));
+            pos = json_w_byte(buf, pos, str_at("0123456789abcdef", lo));
+        } else {
+            pos = json_w_byte(buf, pos, c);
+        }
+        i = i + 1;
+    }
+    return json_w_byte(buf, pos, 34);
+}
+
+// Appends `"key":`.
+pub i32 json_w_key([]u8 buf, i32 pos, string key) {
+    pos = json_w_string(buf, pos, key);
+    return json_w_byte(buf, pos, 58);
+}
+
+// Converts a small non-negative i64 (a single decimal digit) to i32; Pine has no cast yet.
+i32 json_digit(i64 d) {
+    i32 r = 0;
+    while (r < d) {
+        r = r + 1;
+    }
+    return r;
+}
+
+pub i32 json_w_i64([]u8 buf, i32 pos, i64 value) {
+    u8 digits[24];
+    i32 count = 0;
+    bool negative = value < 0;
+    if (value == 0) {
+        digits[0] = 48;
+        count = 1;
+    }
+    while (value != 0) {
+        i64 rem = value % 10;
+        if (rem < 0) {
+            rem = 0 - rem;
+        }
+        digits[count] = 48 + json_digit(rem);
+        count = count + 1;
+        value = value / 10;
+    }
+    if (negative) {
+        pos = json_w_byte(buf, pos, 45);
+    }
+    while (count > 0) {
+        count = count - 1;
+        pos = json_w_byte(buf, pos, digits[count]);
+    }
+    return pos;
+}
+
+pub i32 json_w_bool([]u8 buf, i32 pos, bool value) {
+    if (value) {
+        return json_w_raw(buf, pos, "true");
+    }
+    return json_w_raw(buf, pos, "false");
+}
+
+pub i32 json_w_null([]u8 buf, i32 pos) {
+    return json_w_raw(buf, pos, "null");
+}
