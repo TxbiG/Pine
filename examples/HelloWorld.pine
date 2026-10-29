@@ -1,7 +1,4 @@
-
-void print(string s) {
-    printf("%s", s);
-}
+#import <std/io>
 
 i32 main() {
     print("Hello world!");

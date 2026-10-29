@@ -1,0 +1,10 @@
+
+
+class Foo {
+    int value;
+};
+
+i32 main() {
+    
+    return 0;
+}
