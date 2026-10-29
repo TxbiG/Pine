@@ -48,6 +48,7 @@ ASTNode *ast_make_program(void) {
 ASTNode *ast_make_import_decl(const char *path) {
     ASTNode *node = make_node(AST_IMPORT_DECL);
     node->import_decl.path = copy_text(path);
+    node->import_decl.is_system = 0;
     return node;
 }
 
@@ -286,6 +287,7 @@ void ast_free(ASTNode *node) {
     if (!node) {
         return;
     }
+    free(node->slice_coerce_type);
 
     free(node->source_file);
     switch (node->type) {

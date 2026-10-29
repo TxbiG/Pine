@@ -163,9 +163,10 @@ void lexer_init(Lexer *lexer, const char *source) {
     lexer->pending_error_line = 0;
     lexer->pending_error_column = 0;
     lexer->has_pending_error = 0;
+    lexer->expect_path = 0;
 }
 
-Token lexer_next_token(Lexer *lexer) {
+static Token lexer_scan_token(Lexer *lexer) {
     skip_space_and_comments(lexer);
     if (lexer->has_pending_error) {
         Token token;
@@ -279,24 +280,16 @@ Token lexer_next_token(Lexer *lexer) {
         advance(lexer);
         return make_token(lexer, TOKEN_GTE, start, line, column);
     }
-    if (c == '[' && peek_next(lexer) == '[') {
-        advance(lexer);
-        advance(lexer);
-        return make_token(lexer, TOKEN_LDBRACKET, start, line, column);
-    }
-    if (c == ']' && peek_next(lexer) == ']') {
-        advance(lexer);
-        advance(lexer);
-        return make_token(lexer, TOKEN_RDBRACKET, start, line, column);
-    }
+    // NOTE: `[[` / `]]` are intentionally not single tokens, so nested indexing like a[b[i]] lexes correctly.
 
     // handle # for #import
     if (c == '#') {
         return make_single(lexer, TOKEN_HASH, line, column);
     }
     
-    // handle <path> as a single path token (TOKEN_PATH)
-    if (c == '<') {
+    // `<path>` is a single TOKEN_PATH only directly after `import` (as in `#import <std/json>`);
+    // everywhere else '<' stays a normal comparison/shift operator.
+    if (lexer->expect_path && c == '<') {
         size_t start = lexer->pos;
         advance(lexer); // consume '<'
         while (peek(lexer) != '>' && peek(lexer) != '\0') advance(lexer);
@@ -332,4 +325,10 @@ Token lexer_next_token(Lexer *lexer) {
         case '#': return make_single(lexer, TOKEN_HASH, line, column);
         default: return make_single(lexer, TOKEN_ERROR, line, column);
     }
+}
+
+Token lexer_next_token(Lexer *lexer) {
+    Token token = lexer_scan_token(lexer);
+    lexer->expect_path = (token.type == TOKEN_IMPORT);
+    return token;
 }

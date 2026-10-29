@@ -439,6 +439,9 @@ static void ir_lower_function(ASTNode *fn_node, IRFunction *fn) {
         fn->params[i].array_size = param->param.array_size;
     }
 
+    if (!fn_node->function.body) {
+        return;  // external declaration
+    }
     IRLowerContext ctx = {0};
     ir_lower_block(&ctx, fn, fn_node->function.body);
 }

@@ -107,6 +107,17 @@ static void emit_indent(FILE *out, int indent) {
 
 // Emits a C expression for a Pine expression node.
 static void emit_expr(ASTNode *node, FILE *out) {
+    if (node->slice_coerce_type) {
+        char *slice_type = node->slice_coerce_type;
+        node->slice_coerce_type = NULL;
+        fprintf(out, "((");
+        emit_c_type(slice_type, out);
+        fprintf(out, "){ ");
+        emit_expr(node, out);
+        fprintf(out, ", %zu })", node->slice_coerce_len);
+        node->slice_coerce_type = slice_type;
+        return;
+    }
     switch (node->type) {
         case AST_NUMBER:
             fprintf(out, "%lld", node->number.value);
@@ -197,6 +208,16 @@ static void emit_expr(ASTNode *node, FILE *out) {
             fputc(')', out);
             break;
         case AST_FIELD_EXPR:
+            if (node->length_access == 1) {
+                fprintf(out, "((int64_t)(");
+                emit_expr(node->field.object, out);
+                fprintf(out, ").length)");
+                break;
+            }
+            if (node->length_access == 2) {
+                fprintf(out, "((int64_t)%zu)", node->slice_coerce_len);
+                break;
+            }
             emit_expr(node->field.object, out);
             fprintf(out, ".%s", node->field.field);
             break;
@@ -430,6 +451,9 @@ static void emit_function_decl(ASTNode *node, FILE *out) {
 
 // Emits a complete C function definition.
 static void emit_function(ASTNode *node, FILE *out) {
+    if (!node->function.body) {
+        return;  // external declaration: the prototype was already emitted
+    }
     emit_function_signature(node, out);
     fprintf(out, " {\n");
     emit_block(node->function.body, out, 1);

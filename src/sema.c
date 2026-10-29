@@ -173,11 +173,11 @@ static Type type_from_base_name(Sema *sema, const char *name) {
     if (strcmp(name, "u64") == 0) return (Type){TYPE_U64};
     StructSymbol *struct_symbol = find_struct(sema, name);
     if (struct_symbol && sema_can_access(sema, struct_symbol->source_file, struct_symbol->is_public)) {
-        return type_struct(name);
+        return type_struct(struct_symbol->name);  // persistent name, not the caller's temporary buffer
     }
     EnumSymbol *enum_symbol = find_enum(sema, name);
     if (enum_symbol && sema_can_access(sema, enum_symbol->source_file, enum_symbol->is_public)) {
-        return type_enum(name);
+        return type_enum(enum_symbol->name);
     }
     return type_unknown();
 }
@@ -341,10 +341,35 @@ static int is_copy_type(Type type) {
     return 0;
 }
 
+// Bit width and signedness of integer kinds, used for lossless widening.
+static int int_bits(TypeKind kind) {
+    switch (kind) {
+        case TYPE_I8: case TYPE_U8: return 8;
+        case TYPE_I16: case TYPE_U16: return 16;
+        case TYPE_I32: case TYPE_U32: return 32;
+        case TYPE_I64: case TYPE_U64: return 64;
+        default: return 0;
+    }
+}
+
 // Implements Pine's current assignment compatibility rules.
 static int is_assignable(Type expected, Type actual) {
     if (same_type(expected, actual)) {
         return 1;
+    }
+
+    // Lossless integer widening: same signedness, or unsigned into a strictly wider signed type.
+    if (is_integer(expected) && is_integer(actual) && int_bits(expected.kind) && int_bits(actual.kind)) {
+        int eb = int_bits(expected.kind), ab = int_bits(actual.kind);
+        int e_signed = is_signed_integer(expected), a_signed = is_signed_integer(actual);
+        if (eb > ab && (e_signed == a_signed || (!a_signed && e_signed))) {
+            return 1;
+        }
+    }
+
+    // Array literals: same length, element types assignable (e.g. [1, 2] into u8[2]).
+    if (expected.kind == TYPE_ARRAY && actual.kind == TYPE_ARRAY && expected.array_size == actual.array_size) {
+        return is_assignable(array_element_type(expected), array_element_type(actual));
     }
 
     if (expected.kind == TYPE_NULLABLE) {
@@ -367,8 +392,10 @@ static Type arithmetic_result(Type left, Type right) {
     if (left.kind == TYPE_DOUBLE || right.kind == TYPE_DOUBLE) return (Type){TYPE_DOUBLE};
     if (left.kind == TYPE_FLOAT || right.kind == TYPE_FLOAT) return (Type){TYPE_FLOAT};
     if (same_type(left, right)) return left;
-    if (left.kind == TYPE_I32 && is_integer(right)) return right;
-    if (right.kind == TYPE_I32 && is_integer(left)) return left;
+    if (is_integer(left) && is_integer(right)) {
+        if (is_assignable(left, right)) return left;    // right widens into left (or is an i32 literal)
+        if (is_assignable(right, left)) return right;
+    }
     return type_unknown();
 }
 
@@ -973,6 +1000,17 @@ static Type analyze_call(Sema *sema, ASTNode *expr) {
         if (param->param.array_size > 0) expected = type_array(expected, param->param.array_size);
         Type actual = analyze_expr(sema, expr->call.args->list.items[i]);
 
+        // A fixed-size array may be passed where a slice of the same element type is expected;
+        // codegen wraps it as { data, length }.
+        if (expected.kind == TYPE_SLICE && actual.kind == TYPE_ARRAY &&
+            same_type(slice_element_type(expected), array_element_type(actual))) {
+            ASTNode *arg = expr->call.args->list.items[i];
+            free(arg->slice_coerce_type);
+            arg->slice_coerce_type = strdup(param->param.param_type);
+            arg->slice_coerce_len = actual.array_size;
+            continue;
+        }
+
         if (!is_assignable(expected, actual)) {
             type_error_at(sema, expr->call.args->list.items[i], "argument type mismatch", expected, actual);
         }
@@ -1070,6 +1108,12 @@ static Type analyze_expr(Sema *sema, ASTNode *expr) {
             return analyze_binary(sema, expr);
         case AST_FIELD_EXPR: {
             Type object = analyze_expr(sema, expr->field.object);
+            if ((object.kind == TYPE_SLICE || object.kind == TYPE_ARRAY) &&
+                strcmp(expr->field.field, "length") == 0) {
+                expr->length_access = object.kind == TYPE_SLICE ? 1 : 2;
+                expr->slice_coerce_len = object.array_size;
+                return (Type){TYPE_I64};
+            }
             if (object.kind != TYPE_STRUCT) {
                 sema_error_at(sema, expr, "field access requires struct value", expr->field.field);
                 return type_unknown();
@@ -1438,6 +1482,11 @@ static void analyze_function(Sema *sema, ASTNode *fn) {
             type = type_array(type, param->param.array_size);
         }
         add_symbol(sema, param->param.name, type, 0);
+    }
+
+    if (!fn->function.body) {  // external declaration: signature only
+        pop_scope(sema);
+        return;
     }
 
     int returns = analyze_block(sema, fn->function.body);

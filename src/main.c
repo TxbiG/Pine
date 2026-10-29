@@ -103,7 +103,7 @@ static char *resolve_import_path(const char *base_dir, const char *module_path) 
     memcpy(path, base_dir, base_length);
     path[base_length] = '/';
     for (size_t i = 0; i < module_length; i++) {
-        path[base_length + 1 + i] = module_path[i] == '.' ? '\\' : module_path[i];
+        path[base_length + 1 + i] = module_path[i] == '.' ? '/' : module_path[i];
     }
     memcpy(path + base_length + 1 + module_length, ".pine", 6);
     return path;
@@ -152,6 +152,43 @@ static char *resolve_existing_import_path(const char *base_dir, const char *modu
     return path;
 }
 
+// Resolves `#import <name>` against the library search path:
+//   1. $PINE_LIBRARY   2. <importing file dir>/library   3. ./library
+static char *resolve_library_import(const char *base_dir, const char *module_path) {
+    const char *env = getenv("PINE_LIBRARY");
+    const char *roots[3] = { env, NULL, "./library" };
+    char *local_root = NULL;
+    size_t base_length = strlen(base_dir);
+    local_root = malloc(base_length + sizeof("/library"));
+    memcpy(local_root, base_dir, base_length);
+    memcpy(local_root + base_length, "/library", sizeof("/library"));
+    roots[1] = local_root;
+
+    char *first_candidate = NULL;
+    for (int r = 0; r < 3; r++) {
+        if (!roots[r] || roots[r][0] == '\0') {
+            continue;
+        }
+        size_t need = strlen(roots[r]) + 1 + strlen(module_path) + sizeof(".pine");
+        char *candidate = malloc(need);
+        snprintf(candidate, need, "%s/%s.pine", roots[r], module_path);
+        FILE *file = fopen(candidate, "rb");
+        if (file) {
+            fclose(file);
+            free(first_candidate);
+            free(local_root);
+            return candidate;
+        }
+        if (!first_candidate) {
+            first_candidate = candidate;
+        } else {
+            free(candidate);
+        }
+    }
+    free(local_root);
+    return first_candidate;
+}
+
 static int load_module(const char *path, ASTNode *combined, PathList *loaded, PathList *loading);
 
 static int load_imports(ASTNode *root, const char *base_dir, ASTNode *combined, PathList *loaded, PathList *loading) {
@@ -161,7 +198,9 @@ static int load_imports(ASTNode *root, const char *base_dir, ASTNode *combined, 
             continue;
         }
 
-        char *import_path = resolve_existing_import_path(base_dir, item->import_decl.path);
+        char *import_path = item->import_decl.is_system
+            ? resolve_library_import(base_dir, item->import_decl.path)
+            : resolve_existing_import_path(base_dir, item->import_decl.path);
         int ok = load_module(import_path, combined, loaded, loading);
         free(import_path);
         if (!ok) {

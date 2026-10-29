@@ -77,6 +77,7 @@ static void synchronize(Parser *parser) {
             case TOKEN_STRUCT:
             case TOKEN_ENUM:
             case TOKEN_IMPORT:
+            case TOKEN_HASH:
             case TOKEN_IF:
             case TOKEN_WHILE:
             case TOKEN_FOR:
@@ -731,7 +732,13 @@ static ASTNode *parse_if(Parser *parser) {
 
     if (check(parser, TOKEN_ELSE)) {
         advance(parser);
-        else_block = parse_block(parser);
+        if (check(parser, TOKEN_IF)) {
+            // `else if (...) { ... }` is sugar for `else { if (...) { ... } }`
+            else_block = ast_make_block();
+            ast_list_append(else_block, parse_if(parser));
+        } else {
+            else_block = parse_block(parser);
+        }
     }
 
     return with_location(ast_make_if(condition, then_block, else_block), if_token);
@@ -853,7 +860,13 @@ static ASTNode *parse_function_after_name(Parser *parser, char *type_text, Token
     consume(parser, TOKEN_RPAREN, "expected ')' after function parameters");
 
     char *name_text = token_text(name);
-    ASTNode *body = parse_block(parser);
+    // A signature ending in ';' declares an external (C runtime) function with no Pine body.
+    ASTNode *body = NULL;
+    if (check(parser, TOKEN_SEMI)) {
+        advance(parser);
+    } else {
+        body = parse_block(parser);
+    }
     ASTNode *fn = with_location(ast_make_function(type_text, name_text, params, body), name);
 
     free(type_text);
@@ -861,52 +874,45 @@ static ASTNode *parse_function_after_name(Parser *parser, char *type_text, Token
     return fn;
 }
 
-// Parses `import foo.bar;` into a dotted module path.
+// Parses `#import <std/json>` (library import, '/' separated, optional ';')
+// or the legacy `import foo.bar;` form into an import declaration.
 static ASTNode *parse_import(Parser *parser) {
+    int has_hash = 0;
+    if (check(parser, TOKEN_HASH)) {
+        has_hash = 1;
+        advance(parser);
+    }
     Token import_token = consume(parser, TOKEN_IMPORT, "expected 'import'");
+
+    if (check(parser, TOKEN_PATH)) {
+        Token path_token = parser->current;
+        char *path = token_text(path_token);
+        size_t len = strlen(path);
+        if (len >= 2 && path[0] == '<' && path[len - 1] == '>') {
+            path[len - 1] = '\0';
+            memmove(path, path + 1, len - 1);
+        } else {
+            parse_error(parser, "unterminated '<' in #import path");
+        }
+        if (path[0] == '\0') {
+            parse_error(parser, "empty #import path");
+        }
+        advance(parser);
+        if (check(parser, TOKEN_SEMI)) {
+            advance(parser);
+        }
+        ASTNode *import = with_location(ast_make_import_decl(path), import_token);
+        import->import_decl.is_system = 1;
+        free(path);
+        return import;
+    }
+
+    if (has_hash) {
+        parse_error(parser, "expected <path> after #import");
+    }
+
     Token first = consume(parser, TOKEN_IDENT, "expected module name after import");
     char *path = token_text(first);
-
-    /*
-
-        if (check(parser, TOKEN_STRING)) {
-        Token str = parser->current;
-        path = token_text(str); // token_text likely returns a heap string
-        // strip surrounding quotes if token_text includes them
-        if (path[0] == '"' && path[strlen(path)-1] == '"') {
-            path[strlen(path)-1] = '\0';
-            memmove(path, path+1, strlen(path)); // now path is the inner text
-        }
-        advance(parser);
-    } else if (check(parser, TOKEN_PATH)) {
-        Token p = parser->current;
-        path = token_text(p); // may include <...>
-        // strip '<' and '>' if present
-        size_t len = strlen(path);
-        if (len >= 2 && path[0] == '<' && path[len-1] == '>') {
-            path[len-1] = '\0';
-            memmove(path, path+1, len-1);
-        }
-        advance(parser);
-    } else {
-        // existing dotted-module parsing
-        Token first = consume(parser, TOKEN_IDENT, "expected module name after import");
-        path = token_text(first);
-        while (check(parser, TOKEN_DOT)) {
-            advance(parser);
-            Token part = consume(parser, TOKEN_IDENT, "expected module path segment after '.'");
-            char *part_text = token_text(part);
-            path = append_char(path, '.');
-            size_t path_length = strlen(path);
-            size_t part_length = strlen(part_text);
-            char *next = realloc(path, path_length + part_length + 1);
-            memcpy(next + path_length, part_text, part_length + 1);
-            path = next;
-            free(part_text);
-        }
-    }
-    */
-
     while (check(parser, TOKEN_DOT)) {
         advance(parser);
         Token part = consume(parser, TOKEN_IDENT, "expected module path segment after '.'");
@@ -984,12 +990,21 @@ ASTNode *parse_program(Parser *parser) {
             continue;
         }
 
+        // Optional visibility: `pub` exports the declaration, `private` is the default.
+        int is_pub = 0;
+        if (check(parser, TOKEN_PUB)) {
+            is_pub = 1;
+            advance(parser);
+        } else if (check(parser, TOKEN_PRIVATE)) {
+            advance(parser);
+        }
+
         ASTNode *decl = NULL;
         if (check(parser, TOKEN_ENUM)) {
             decl = parse_enum_decl(parser);
         } else if (check(parser, TOKEN_STRUCT)) {
             decl = parse_struct_decl(parser);
-        } else if (check(parser, TOKEN_IMPORT)) {
+        } else if (check(parser, TOKEN_IMPORT) || check(parser, TOKEN_HASH)) {
             decl = parse_import(parser);
         } else if (check(parser, TOKEN_CONST) || is_type_token(parser->current.type) || check(parser, TOKEN_IDENT)) {
             decl = parse_global_or_function(parser);
@@ -1000,6 +1015,9 @@ ASTNode *parse_program(Parser *parser) {
             continue;
         }
 
+        if (is_pub && decl) {
+            ast_set_public(decl, 1);
+        }
         ast_list_append(program, decl);
         if (parser->errors > 0) synchronize(parser);
     }

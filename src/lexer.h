@@ -49,7 +49,6 @@ typedef enum {
 
     // Reserved for future data-type work (Phase 4 of the roadmap).
     // Not yet consumed by the parser.
-    TOKEN_EXTERN,
     TOKEN_ENUM,
     TOKEN_STRUCT,
     TOKEN_CLASS,
@@ -136,6 +135,7 @@ typedef struct {
     int pending_error_line;
     int pending_error_column;
     int has_pending_error;
+    int expect_path;   // set right after the `import` keyword so `<...>` lexes as a path
 } Lexer;
 
 // Initializes the lexer before the first call to lexer_next_token.

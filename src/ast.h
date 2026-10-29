@@ -53,6 +53,9 @@ struct ASTNode {
     int column;
     char *source_file;
     int is_public;
+    char *slice_coerce_type;   // set by sema when a fixed array argument is passed as a slice
+    size_t slice_coerce_len;
+    int length_access;         // 1: `.length` of a slice, 2: `.length` of a fixed array (constant slice_coerce_len)
     union {
         struct {
             ASTNode **items;
@@ -60,6 +63,7 @@ struct ASTNode {
         } list;
         struct {
             char *path;
+            int is_system;   // 1 for `#import <...>` (library search), 0 for legacy `import a.b;`
         } import_decl;
         struct {
             char *name;
