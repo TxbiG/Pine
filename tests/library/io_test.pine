@@ -1,0 +1,73 @@
+#import <io>
+
+i32 failures = 0;
+
+void expect(bool condition, string name) {
+    if (!condition) {
+        io_eprint("FAIL: ");
+        io_eprintln(name);
+        failures = failures + 1;
+    }
+}
+
+i32 main() {
+    string path = "pine_io_test.tmp";
+    u8 data[18] = [108, 105, 110, 101, 32, 111, 110, 101, 10, 108, 105, 110, 101, 32, 116, 119, 111, 10];
+
+    // write + size + exists
+    expect(io_write_file(path, data, 18) == 18, "write_file");
+    expect(io_file_exists(path), "file exists");
+    expect(io_file_size(path) == 18, "file size");
+
+    // whole-file read
+    u8 back[64];
+    expect(io_read_file(path, back) == 18, "read_file count");
+    expect(back[0] == 108 && back[17] == 10, "read_file contents");
+
+    // too-small buffer is rejected, not truncated
+    u8 tiny[4];
+    expect(io_read_file(path, tiny) == -1, "read_file buffer too small");
+
+    // line reading
+    i32 h = io_open(path, IO_READ);
+    expect(h >= 3, "open for reading");
+    u8 line[32];
+    i64 n = io_read_line(h, line);
+    expect(n == 8 && line[0] == 108 && line[7] == 101, "first line");
+    n = io_read_line(h, line);
+    expect(n == 8 && line[5] == 116, "second line");
+    expect(io_read_line(h, line) == -1, "end of input");
+    expect(io_close(h) == 0, "close");
+
+    // append, then re-read
+    h = io_open(path, IO_APPEND);
+    expect(io_write(h, data) == 18, "append write");
+    io_close(h);
+    expect(io_file_size(path) == 36, "size after append");
+
+    // line too long for the buffer
+    h = io_open(path, IO_READ);
+    u8 small_line[3];
+    expect(io_read_line(h, small_line) == -2, "line does not fit");
+    io_close(h);
+
+    // errors
+    expect(io_open("no/such/dir/file.tmp", IO_READ) == -1, "open missing file");
+    expect(io_file_size("no/such/file.tmp") == -1, "size of missing file");
+    expect(!io_file_exists("no/such/file.tmp"), "missing file does not exist");
+    expect(io_close(99) == -1, "close bad handle");
+
+    // cleanup
+    expect(io_remove(path) == 0, "remove");
+    expect(!io_file_exists(path), "gone after remove");
+
+    // console output (visible in the run log)
+    io_print("io: ");
+    io_print_i64(-42);
+    io_println(" console ok");
+
+    if (failures == 0) {
+        io_println("io: all tests passed");
+    }
+    return failures;
+}

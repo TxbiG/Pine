@@ -1,0 +1,127 @@
+#import <io>
+#import <json>
+
+i32 failures = 0;
+
+void expect(bool condition, string name) {
+    if (!condition) {
+        io_eprint("FAIL: ");
+        io_eprintln(name);
+        failures = failures + 1;
+    }
+}
+
+// Parses `text` into doc storage owned by the caller and returns the doc.
+JsonDoc parse_text(string text, []u8 buf, []i32 kinds, []i32 starts, []i32 ends, []i32 sizes, []i32 parents) {
+    i32 n = str_copy(text, buf);
+    JsonDoc doc = json_doc(buf, n, kinds, starts, ends, sizes, parents);
+    return json_parse(doc);
+}
+
+i32 main() {
+    u8 buf[512];
+    i32 kinds[64];
+    i32 starts[64];
+    i32 ends[64];
+    i32 sizes[64];
+    i32 parents[64];
+    u8 out[64];
+
+    JsonDoc doc = parse_text("{\"name\":\"Pine\",\"stars\":42,\"neg\":-7,\"ok\":true,\"none\":null,\"tags\":[\"a\",\"b\\n\"],\"nested\":{\"x\":1,\"y\":[10,20,30]},\"uni\":\"\\u00e9\\ud83d\\ude00\",\"f\":1.5e3}",
+                             buf, kinds, starts, ends, sizes, parents);
+    expect(doc.count > 0, "parse succeeds");
+    expect(json_kind(doc, 0) == JSON_OBJECT, "root is object");
+    expect(json_size(doc, 0) == 9, "root has 9 pairs");
+
+    i32 name = json_get(doc, 0, "name");
+    expect(json_kind(doc, name) == JSON_STRING, "name is a string");
+    expect(json_str_eq(doc, name, "Pine"), "name == Pine");
+    expect(json_string(doc, name, out) == 4, "decoded name length");
+
+    expect(json_to_i64(doc, json_get(doc, 0, "stars")) == 42, "stars == 42");
+    expect(json_to_i64(doc, json_get(doc, 0, "neg")) == -7, "neg == -7");
+    expect(json_to_bool(doc, json_get(doc, 0, "ok")), "ok == true");
+    expect(json_kind(doc, json_get(doc, 0, "none")) == JSON_NULL, "none is null");
+    expect(json_get(doc, 0, "missing") == -1, "missing key");
+
+    i32 f = json_get(doc, 0, "f");
+    expect(json_kind(doc, f) == JSON_NUMBER && !json_is_integer(doc, f), "1.5e3 is a non-integer number");
+
+    i32 tags = json_get(doc, 0, "tags");
+    expect(json_kind(doc, tags) == JSON_ARRAY && json_size(doc, tags) == 2, "tags array");
+    i32 b = json_at(doc, tags, 1);
+    expect(json_string(doc, b, out) == 2 && out[0] == 98 && out[1] == 10, "tags[1] decodes to b + newline");
+    expect(json_at(doc, tags, 2) == -1, "tags[2] out of range");
+
+    i32 nested = json_get(doc, 0, "nested");
+    i32 y = json_get(doc, nested, "y");
+    expect(json_to_i64(doc, json_at(doc, y, 2)) == 30, "nested.y[2] == 30");
+    // keys after a nested value are still found (json_next skips the whole subtree)
+    expect(json_str_eq(doc, json_get(doc, 0, "uni") - 1, "uni"), "key after nested values");
+
+    i32 uni = json_get(doc, 0, "uni");
+    i32 ulen = json_string(doc, uni, out);
+    expect(ulen == 6, "unicode decodes to 6 bytes (e-acute + emoji)");
+    expect(out[0] == 195 && out[1] == 169 && out[2] == 240 && out[3] == 159 && out[4] == 152 && out[5] == 128, "utf-8 bytes");
+
+    // ---- errors ----
+    JsonDoc bad = parse_text("[1,2", buf, kinds, starts, ends, sizes, parents);
+    expect(bad.count == JSON_ERR_PART, "unterminated array");
+    bad = parse_text("{\"a\":tru}", buf, kinds, starts, ends, sizes, parents);
+    expect(bad.count == JSON_ERR_INVAL, "bad literal");
+    bad = parse_text("[1}", buf, kinds, starts, ends, sizes, parents);
+    expect(bad.count == JSON_ERR_INVAL, "mismatched brackets");
+    bad = parse_text("\"\\x\"", buf, kinds, starts, ends, sizes, parents);
+    expect(bad.count == JSON_ERR_INVAL, "bad escape");
+    bad = parse_text("[01]", buf, kinds, starts, ends, sizes, parents);
+    expect(bad.count == JSON_ERR_INVAL, "leading zero");
+    bad = parse_text("\"abc", buf, kinds, starts, ends, sizes, parents);
+    expect(bad.count == JSON_ERR_PART, "unterminated string");
+
+    i32 small_kinds[2];
+    i32 small_starts[2];
+    i32 small_ends[2];
+    i32 small_sizes[2];
+    i32 small_parents[2];
+    bad = parse_text("[1,2,3]", buf, small_kinds, small_starts, small_ends, small_sizes, small_parents);
+    expect(bad.count == JSON_ERR_NOMEM, "token capacity exceeded");
+
+    // ---- writer ----
+    u8 w[128];
+    i32 p = 0;
+    p = json_w_begin_object(w, p);
+    p = json_w_key(w, p, "name");
+    p = json_w_string(w, p, "Pi\"ne\n");
+    p = json_w_comma(w, p);
+    p = json_w_key(w, p, "n");
+    p = json_w_i64(w, p, -1205);
+    p = json_w_comma(w, p);
+    p = json_w_key(w, p, "z");
+    p = json_w_i64(w, p, 0);
+    p = json_w_comma(w, p);
+    p = json_w_key(w, p, "list");
+    p = json_w_begin_array(w, p);
+    p = json_w_bool(w, p, true);
+    p = json_w_comma(w, p);
+    p = json_w_null(w, p);
+    p = json_w_end_array(w, p);
+    p = json_w_end_object(w, p);
+    expect(p > 0, "writer fits");
+    expect(str_eq_span(w, 0, p, "{\"name\":\"Pi\\\"ne\\n\",\"n\":-1205,\"z\":0,\"list\":[true,null]}"), "writer output");
+
+    // overflow is reported, not silently truncated
+    u8 tiny[4];
+    i32 q = json_w_raw(tiny, 0, "toolong");
+    expect(q == -1, "writer overflow returns -1");
+
+    // round trip: what we wrote parses back
+    JsonDoc back = json_doc(w, p, kinds, starts, ends, sizes, parents);
+    back = json_parse(back);
+    expect(back.count > 0 && json_to_i64(doc, 0) == 0, "writer output parses");
+    expect(json_to_i64(back, json_get(back, 0, "n")) == -1205, "round trip n");
+
+    if (failures == 0) {
+        io_println("json: all tests passed");
+    }
+    return failures;
+}
